@@ -960,15 +960,23 @@ def selftest(c):
         # この単位には非開示ゴールデンが無い。[C][D] は非開示の投入と残留の検査
         # なので、成立しない。代わりに「新規テストが Unity 側でも実行されること」
         # を確かめる。ここを飛ばすと、Unity 側で 1 件も走らなくても気づけない。
-        print("[C] 非開示は無し。新規テストが Unity 側で実行されるかを見る")
+        # 新規テストは tests/Core.Tests（dotnet 側）にある。Unity はそこを
+        # コンパイルしないので、Unity 結果に現れないのが正常（実測で確認）。
+        # Unity 側の役目はこの単位では非回帰だけ。実装前に既存が壊れていない
+        # ことを確かめる。ここを飛ばすと、新規ファイルが Unity を巻き込んで
+        # 壊していても気づけない。
+        print("[C] 非開示は無し。Unity 側の非回帰だけを見る")
         stage_golden(c, with_holdout=False)
         unity, err = run_unity_tests(c, "self_td")
         if err:
-            check("Unity 側の実行", True, "ビルドが失敗（実装が無いので当然）")
+            check("Unity が実行できる", False, err)
         else:
-            for t in c.unit["acceptance"]["required_tests"]:
-                hits = names_with(unity, t)
-                check(f"Unity 側に {t} が現れる", len(hits) > 0, f"{len(hits)} 件")
+            failed = [n for n, o in unity.items() if o == "Failed"]
+            skipped = [n for n, o in unity.items() if o in ("Skipped", "Inconclusive")]
+            check("実装前でも Unity は緑", len(failed) == 0,
+                  f"{len(failed)} 件 Failed / {len(unity)} 件中")
+            check("skip が既定どおり", len(skipped) <= c.cfg["unity_skip_baseline"],
+                  f"{len(skipped)} / 上限 {c.cfg['unity_skip_baseline']}")
         sandbox_reset(c)
         ng_count = sum(1 for ok in log if not ok)
         print()
