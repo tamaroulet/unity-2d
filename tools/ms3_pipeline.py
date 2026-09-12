@@ -173,10 +173,21 @@ def gate_static(c):
     core_t = core.read_text(encoding="utf-8", errors="replace")
     so_t = so.read_text(encoding="utf-8", errors="replace")
 
+    # --- Game.Core 側を先に見る。
+    # コンパイル可否に直結するもの（Mathf の残存）を、配線の問題（委譲）より先に
+    # 報告する。逆順にすると、委譲が未配線の間は Mathf の門に到達できず、
+    # 門が効いているかを確かめられない（自己検査で実測した）。
     missing = [s for s in c.unit["required_symbols"] if s not in core_t]
     if missing:
         return "シグネチャが壊れています: " + ", ".join(missing)
 
+    if re.search(c.unit["forbidden_in_core_regex"], core_t):
+        return "Game.Core 側に Mathf が残っています（noEngineReferences で通りません）"
+
+    if c.unit["forbidden_leftover"] in core_t:
+        return f"{c.unit['forbidden_leftover']} が残っています（{c.unit['core_impl']}）"
+
+    # --- SO 側
     so_missing = [s for s in c.unit["so_required_symbols"] if s not in so_t]
     if so_missing:
         return "インスペクタ結合が壊れています: " + ", ".join(so_missing)
@@ -184,12 +195,10 @@ def gate_static(c):
     if c.unit["so_required_delegation"] not in so_t:
         return f"委譲されていません（{c.unit['so_required_delegation']} が無い）"
 
-    if re.search(c.unit["forbidden_in_core_regex"], core_t):
-        return "Game.Core 側に Mathf が残っています（noEngineReferences で通りません）"
+    if c.unit["forbidden_leftover"] in so_t:
+        return f"{c.unit['forbidden_leftover']} が残っています（{c.unit['so_impl']}）"
 
-    for text, name in ((core_t, c.unit["core_impl"]), (so_t, c.unit["so_impl"])):
-        if c.unit["forbidden_leftover"] in text:
-            return f"{c.unit['forbidden_leftover']} が残っています（{name}）"
+    for text in (core_t, so_t):
         m = re.search(c.unit["forbidden_skip_attribute_regex"], text)
         if m:
             return f"skip 属性の使用: [{m.group(1)}]"
