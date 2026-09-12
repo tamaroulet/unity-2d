@@ -145,6 +145,17 @@ def sandbox_reset(c):
         sys.exit(f"ABORT: サンドボックスに開示ゴールデンがありません: {c.g['disclosed_rel']}")
 
 
+def guid_of(meta_path):
+    """.meta から guid を取り出す。読めなければ None。"""
+    try:
+        for line in meta_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("guid:"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
 def append_timeline(c, sha):
     """CI が緑になったときだけ、末尾に 1 件追記する。
 
@@ -609,14 +620,30 @@ def attempt(c, feedback):
     # ABORT する（Step 1 のマージ時に顕在化した）。
     carried = []
     for rel in c.unit["whitelist"]:
-        for cand in (rel, rel + ".meta"):
-            src = c.sb(cand)
-            if not src.exists():
-                continue          # tools/ 配下など .meta を持たないものもある
-            dst = c.repo / cand.replace("/", "\\")
+        src = c.sb(rel)
+        if src.exists():
+            dst = c.repo / rel.replace("/", "\\")
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
-            carried.append(cand)
+            carried.append(rel)
+
+        # .meta は GUID を持つ。無条件に上書きすると、そのクラスを参照する
+        # Prefab / Scene / .asset がすべて Missing (MonoScript) になる。
+        #   - 本体に既にある場合は触らない（新規作成時だけ運ぶ）
+        #   - ただし GUID がずれていたらそれ自体が事故なので ABORT する
+        meta_src = c.sb(rel + ".meta")
+        meta_dst = c.repo / (rel + ".meta").replace("/", "\\")
+        if not meta_src.exists():
+            continue              # tools/ 配下など .meta を持たないものもある
+        if meta_dst.exists():
+            g_repo, g_sb = guid_of(meta_dst), guid_of(meta_src)
+            if g_repo != g_sb:
+                return "ABORT", (f"GUID 不一致: {rel}.meta "
+                                 f"(repo={g_repo} sandbox={g_sb})。"
+                                 "上書きすると参照が壊れるため中止します")
+            continue              # 一致しているなら上書きしない
+        shutil.copyfile(meta_src, meta_dst)
+        carried.append(rel + ".meta")
     print(f"    {len(carried)} ファイル: " + ", ".join(Path(x).name for x in carried))
     run(["git", "add", "--"] + carried, c.repo, c.ttl["git"], "add")
     run(["git", "commit", "-m",
@@ -644,7 +671,13 @@ def attempt(c, feedback):
     run(["git", "commit", "-m", f"docs(timeline): record {c.unit['id']}"],
         c.repo, c.ttl["git"], "commit timeline")
     # この追記コミットの CI は watch しない（内容は Markdown のみ）。
-    run(["git", "push"], c.repo, c.ttl["git"], "push timeline")
+    rc, out, err = run(["git", "push"], c.repo, c.ttl["git"], "push timeline")
+    if rc != 0:
+        # 実装は既に取り込まれているのに記録が残らない不整合。
+        # 黙って成功にしない。作業ツリーが汚れたまま残るので、次回の
+        # require_repo_clean が確実に拾う（静かに失われるより良い）。
+        return "ABORT", ("実装は取り込まれましたが TIMELINE の push に失敗しました。"
+                         "記録と実体が食い違っています: " + (err or out)[:200])
 
     return "SUCCESS", ""
 
