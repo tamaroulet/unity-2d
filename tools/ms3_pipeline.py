@@ -448,6 +448,11 @@ def gate_static(c):
 
 
 def gate_diff_lines(c, verbose=True):
+    # 未追跡のファイルは git diff に出ない。新規単位では実装ファイルが
+    # 丸ごと新規なので、これをやらないと差分が常に 0 になり門が発火しない
+    # （実測で発覚。自己検査だけでなく本番の穴だった）。
+    # -N は intent-to-add。中身はステージせず、diff に現れるようにするだけ。
+    run(["git", "add", "-N", "--"] + c.unit["whitelist"], c.sandbox, c.ttl["git"], "intent-to-add")
     total = 0
     for rel in c.unit["whitelist"]:
         _, out, _ = run(["git", "diff", "--numstat", "HEAD", "--", rel],
@@ -912,7 +917,16 @@ def selftest(c):
     # 次の gate_whitelist が許可外として拾う）。
     core_existed = core.exists()
     orig = core.read_text(encoding="utf-8") if core_existed else ""
-    core.parent.mkdir(parents=True, exist_ok=True)
+
+    # 実装ファイルが複数ある単位では、1 本だけ作っても別の「存在しません」で
+    # 門が落ち、何を検査しているのか分からなくなる（実測）。全部そろえる。
+    created = []
+    for rel in (c.unit.get("impl_files") or c.unit["whitelist"]):
+        p = c.sb(rel)
+        if not p.exists():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("// selftest probe placeholder\n", encoding="utf-8")
+            created.append(p)
 
     core.write_text("namespace X { public class Empty { } }", encoding="utf-8")
     ng = gate_static(c)
@@ -935,10 +949,34 @@ def selftest(c):
     ng = gate_diff_lines(c, verbose=False)
     check("差分行数を弾く", ng is not None, str(ng))
 
+    for p in created:
+        p.unlink(missing_ok=True)      # 検査のために作った実体を残さない
     if not core_existed:
-        core.unlink(missing_ok=True)   # 検査のために作った実体を残さない
+        core.unlink(missing_ok=True)
     core.write_text(orig, encoding="utf-8")
     sandbox_reset(c)
+
+    if c.test_driven:
+        # この単位には非開示ゴールデンが無い。[C][D] は非開示の投入と残留の検査
+        # なので、成立しない。代わりに「新規テストが Unity 側でも実行されること」
+        # を確かめる。ここを飛ばすと、Unity 側で 1 件も走らなくても気づけない。
+        print("[C] 非開示は無し。新規テストが Unity 側で実行されるかを見る")
+        stage_golden(c, with_holdout=False)
+        unity, err = run_unity_tests(c, "self_td")
+        if err:
+            check("Unity 側の実行", True, "ビルドが失敗（実装が無いので当然）")
+        else:
+            for t in c.unit["acceptance"]["required_tests"]:
+                hits = names_with(unity, t)
+                check(f"Unity 側に {t} が現れる", len(hits) > 0, f"{len(hits)} 件")
+        sandbox_reset(c)
+        ng_count = sum(1 for ok in log if not ok)
+        print()
+        if ng_count:
+            print(f"自己検査 NG: {ng_count} 件。門が効いていないので本番を回しません。")
+            return 2
+        print("自己検査 すべて OK。門は赤を出せる状態です。")
+        return 0
 
     print("[C] 非開示の投入")
     try:
