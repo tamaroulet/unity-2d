@@ -812,6 +812,11 @@ def carry_out_and_ci(c):
          f"feat(ms3): implement {c.unit['id']} via pipeline"],
         c.repo, c.ttl["git"], "commit")
     rc, out, err = run(["git", "push"], c.repo, c.ttl["git"], "push")
+    if rc != 0 and "no upstream branch" in (err + out):
+        # 新しいブランチで初めて push するとき。追跡先を設定して張り直す。
+        _, br, _ = run(["git", "branch", "--show-current"], c.repo, c.ttl["git"], "branch")
+        rc, out, err = run(["git", "push", "--set-upstream", "origin", br.strip()],
+                           c.repo, c.ttl["git"], "push -u")
     if rc != 0:
         return "ABORT", f"push できません: {(err or out)[:300]}"
 
