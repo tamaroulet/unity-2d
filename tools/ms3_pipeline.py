@@ -495,8 +495,21 @@ def run_fast_tests(c, tag):
         return None, "検査系故障: TRX が生成されませんでした（ビルド失敗の可能性）"
 
     root = ET.parse(trx).getroot()
-    results = {r.get("testName"): r.get("outcome")
-               for r in root.iter(f"{TRX_NS}UnitTestResult")}
+
+    # TRX の testName はメソッド名だけで、クラス名は別要素の className にある。
+    # required_tests はクラス名で書かれるので、メソッド名だけを探すと
+    # 「1 件も実行されていない」と誤判定する（実測。実装は成功していた）。
+    # className.methodName の形に組み立ててから照合する。
+    fullname = {}
+    for ut in root.iter(f"{TRX_NS}UnitTest"):
+        tm = ut.find(f"{TRX_NS}TestMethod")
+        if tm is not None and ut.get("name"):
+            fullname[ut.get("name")] = f"{tm.get('className', '')}.{ut.get('name')}"
+
+    results = {}
+    for r in root.iter(f"{TRX_NS}UnitTestResult"):
+        n = r.get("testName")
+        results[fullname.get(n, n)] = r.get("outcome")
 
     counters = root.find(f"{TRX_NS}ResultSummary/{TRX_NS}Counters")
     if counters is not None:
