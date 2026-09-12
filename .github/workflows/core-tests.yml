@@ -1,0 +1,83 @@
+name: core-tests
+
+# Unity を使わず .NET SDK だけで動く門。
+# ランナーに Unity は無く、Personal ライセンスは CI 利用に制限があるため、
+# Unity の受入は tools/accept.ps1 でローカル実行する（ハイブリッド）。
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # LFS は取得しない。PNG は純粋ロジックのテストに要らない
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # continue-on-error が無いと、テスト失敗でここのステップごと落ちて
+      # 後続の検査がスキップされ、「終了コードを信用しない」設計が成立しない。
+      # 合否は次のステップが決める。
+      - name: dotnet test
+        continue-on-error: true
+        run: >
+          dotnet test tests/Core.Tests/Core.Tests.csproj
+          --nologo
+          --logger "trx;LogFileName=core-tests.trx"
+          --results-directory _out
+
+      - name: 実行内容の検査（終了コードを信用しない）
+        run: |
+          python3 - <<'PY'
+          import glob, sys
+          import xml.etree.ElementTree as ET
+
+          NS = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+
+          files = glob.glob("_out/**/*.trx", recursive=True)
+          if not files:
+              sys.exit("NG: TRX が生成されていません（ビルド失敗の可能性）")
+
+          root = ET.parse(files[0]).getroot()
+          c = root.find(f"{NS}ResultSummary/{NS}Counters")
+          if c is None:
+              sys.exit("NG: TRX に集計がありません")
+
+          got = {k: int(c.get(k, 0)) for k in ("total", "passed", "failed", "notExecuted")}
+          names = [r.get("testName") or "" for r in root.iter(f"{NS}UnitTestResult")]
+          disclosed = [n for n in names if "golden_disclosed_" in n]
+
+          print(f"total={got['total']} passed={got['passed']} failed={got['failed']} "
+                f"skipped={got['notExecuted']} disclosed={len(disclosed)}")
+
+          ng = []
+          # 「1件も実行しなくても終了コード 0」を潰す。既往事故そのもの。
+          if got["passed"] == 0:
+              ng.append("1件も通っていない（= 見ていない）")
+          if got["failed"] > 0:
+              ng.append(f"失敗 {got['failed']} 件")
+          # skip を分母から外させない。
+          if got["notExecuted"] > 0:
+              ng.append(f"skip {got['notExecuted']} 件")
+          # 対象のテストが実際に走ったことの確認。
+          if len(disclosed) < 18:
+              ng.append(f"開示ゴールデンが {len(disclosed)} 件しか実行されていない")
+
+          for n in ng:
+              print("  - " + n)
+          if ng:
+              sys.exit("NG")
+          print("OK")
+          PY
+
+      - name: TRX を保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-tests-trx
+          path: _out/**/*.trx
+          if-no-files-found: warn

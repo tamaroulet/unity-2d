@@ -21,13 +21,13 @@
        つまり「Core 直下と Data が UnityEngine 非依存であること」が
        このビルドの成否そのもので機械的に保証される。 -->
   <ItemGroup>
-    <Compile Include="..\..\Game\Assets\Core\*.cs" />
-    <Compile Include="..\..\Game\Assets\Core\Data\*.cs" />
+    <Compile Include="../../Game/Assets/Core/*.cs" />
+    <Compile Include="../../Game/Assets/Core/Data/*.cs" />
   </ItemGroup>
 
   <!-- Link で出力直下に平らに置く。テストは TestDirectory から golden_*.json を探す。 -->
   <ItemGroup>
-    <None Include="..\golden\golden_*.json"
+    <None Include="../golden/golden_*.json"
           Link="%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
