@@ -111,12 +111,27 @@ def sandbox_reset(c):
         if rc != 0:
             sys.exit(f"ABORT: サンドボックスを作れません: {err}")
 
+    # リポジトリの現在位置へ合わせる。"HEAD" を指定すると detached worktree は
+    # 自分の古いコミットに留まり、リポジトリ側の修正が永遠に届かない。
+    # MS1 の sandbox_reset に同じ教訓をコメントで書いたのに、MS3 で再演した。
+    # 散文は再発を防がないので、下で機械検査する。
+    rc, out, _ = run(["git", "rev-parse", "HEAD"], c.repo, c.ttl["git"], "repo head")
+    target = out.strip()
+    if rc != 0 or not target:
+        sys.exit("ABORT: リポジトリの HEAD を取得できません")
+
     purge_holdout(c)
-    run(["git", "reset", "--hard", "HEAD"], c.sandbox, c.ttl["git"], "reset")
-    run(["git", "checkout", "--detach", "HEAD"], c.sandbox, c.ttl["git"], "detach")
-    run(["git", "fetch", "origin"], c.sandbox, c.ttl["git"], "fetch")
+    run(["git", "reset", "--hard", target], c.sandbox, c.ttl["git"], "reset to repo head")
     run(["git", "clean", "-fd"], c.sandbox, c.ttl["git"], "clean")
     purge_holdout(c)
+
+    # 同期できたことの検査。ここを散文ではなく検査にしないと、同じ間違いが
+    # 次に書かれたとき「実装が悪い」という形で 3 回 REJECT されるだけで、
+    # 原因に到達できない（実測でそうなった）。
+    _, sb_head, _ = run(["git", "rev-parse", "HEAD"], c.sandbox, c.ttl["git"], "sandbox head")
+    if sb_head.strip() != target:
+        sys.exit(f"ABORT: サンドボックスがリポジトリに追従していません "
+                 f"(sandbox={sb_head.strip()[:8]} repo={target[:8]})")
 
     if (c.sb(c.g["holdout_rel"])).exists():
         sys.exit("ABORT: ホールドアウトの残骸を消せませんでした")
@@ -124,9 +139,19 @@ def sandbox_reset(c):
         sys.exit(f"ABORT: サンドボックスに開示ゴールデンがありません: {c.g['disclosed_rel']}")
 
 
-def sync_sandbox_to(c, ref):
-    run(["git", "fetch", "origin"], c.sandbox, c.ttl["git"], "fetch")
-    run(["git", "reset", "--hard", ref], c.sandbox, c.ttl["git"], "reset to ref")
+def require_repo_clean(c):
+    """起動時にリポジトリがクリーンであることを要求する。
+
+    汚れたまま起動すると 2 つの害がある:
+      1. 未コミットの修正はサンドボックスへ届かない（同期はコミット単位のため）
+      2. 実行後の gate_repo_untouched が、その汚れを「AIの脱走」と誤報告する
+    起動時の汚れ（運用ミス）と実行中の書き換え（脱走）を区別するため、
+    ここで先に落とす。
+    """
+    dirty = gate_repo_untouched(c)
+    if dirty:
+        sys.exit("ABORT: リポジトリに未コミットの変更があります。"
+                 "コミットするか破棄してから実行してください: " + ", ".join(dirty[:5]))
 
 
 def purge_holdout(c):
@@ -507,6 +532,8 @@ def selftest(c):
 
     print("=== 門の自己検査（実装AIは呼びません） ===")
     sandbox_reset(c)
+    _, sb_head, _ = run(["git", "rev-parse", "HEAD"], c.sandbox, c.ttl["git"], "sandbox head")
+    check("サンドボックスがリポジトリに追従している", True, sb_head.strip()[:8])
 
     print("[A] ベースライン（スタブのまま）")
     fast, err = run_fast_tests(c, "self_fast")
@@ -590,6 +617,7 @@ def main():
     args = ap.parse_args()
 
     c = Ctx(args.config, args.unit)
+    require_repo_clean(c)
 
     if args.selftest:
         return selftest(c)
