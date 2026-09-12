@@ -907,7 +907,12 @@ def selftest(c):
 
     core_rel = c.unit.get("core_impl") or (c.unit.get("impl_files") or c.unit["whitelist"])[0]
     core = c.sb(core_rel)
-    orig = core.read_text(encoding="utf-8")
+    # 新規単位では実装ファイルがまだ無い。門は「ファイルの中身」を見るので、
+    # 検査のあいだだけ実体を作る。終わったら消す（作りっぱなしにすると
+    # 次の gate_whitelist が許可外として拾う）。
+    core_existed = core.exists()
+    orig = core.read_text(encoding="utf-8") if core_existed else ""
+    core.parent.mkdir(parents=True, exist_ok=True)
 
     core.write_text("namespace X { public class Empty { } }", encoding="utf-8")
     ng = gate_static(c)
@@ -929,6 +934,9 @@ def selftest(c):
                     encoding="utf-8")
     ng = gate_diff_lines(c, verbose=False)
     check("差分行数を弾く", ng is not None, str(ng))
+
+    if not core_existed:
+        core.unlink(missing_ok=True)   # 検査のために作った実体を残さない
     core.write_text(orig, encoding="utf-8")
     sandbox_reset(c)
 
