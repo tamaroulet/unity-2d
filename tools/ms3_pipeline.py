@@ -86,7 +86,12 @@ class Ctx:
 
         self.ctrl_fail = self.cfg["control_groups"]["must_fail"]
         self.ctrl_pass = self.cfg["control_groups"]["must_pass"]
-        self.g = self.unit["golden"]
+        # 単位には 2 種類ある。
+        #   リファクタリング: 既存実装から採取したゴールデンが正解（MS1〜3）
+        #   新規機能        : 既存の正解が無い。分解役が先に書いたテストが正解
+        # 後者を「テスト駆動モード」と呼ぶ。golden が無ければそちら。
+        self.g = self.unit.get("golden")
+        self.test_driven = self.g is None
         self.out.mkdir(parents=True, exist_ok=True)
 
         # TIMELINE への追記に使う実測値。各門が通るたびに埋まる。
@@ -139,6 +144,8 @@ def sandbox_reset(c):
         sys.exit(f"ABORT: サンドボックスがリポジトリに追従していません "
                  f"(sandbox={sb_head.strip()[:8]} repo={target[:8]})")
 
+    if c.test_driven:
+        return
     if (c.sb(c.g["holdout_rel"])).exists():
         sys.exit("ABORT: ホールドアウトの残骸を消せませんでした")
     if not (c.sb(c.g["disclosed_rel"])).exists():
@@ -244,6 +251,30 @@ def heads_match(c):
     return r.strip(), s.strip(), (r.strip() == s.strip() and bool(r.strip()))
 
 
+TEST_PATH_RE = re.compile(r"(Tests?\.cs$|[/\\][Tt]ests?[/\\]|golden.*\.json$)")
+
+
+def require_unit_safe(c):
+    """単位定義そのものを検査する。
+
+    新規機能では、分解役（LLM）が書いたテストが唯一のオラクルになる。
+    そのテストがホワイトリストに入っていれば、実装役はテストを書き換えて
+    通せる（報酬ハッキング）。単位定義も LLM が生成するので、
+    **監査に任せず機械で弾く。** これは推奨ではなく前提条件。
+    """
+    bad = [p for p in c.unit["whitelist"] if TEST_PATH_RE.search(p)]
+    if bad:
+        sys.exit("ABORT: ホワイトリストにテストまたはゴールデンが含まれています。"
+                 "実装役がオラクルを書き換えられるため実行しません: " + ", ".join(bad))
+
+    if not c.unit["whitelist"]:
+        sys.exit("ABORT: ホワイトリストが空です")
+
+    if c.test_driven and not c.unit.get("acceptance", {}).get("required_tests"):
+        sys.exit("ABORT: テスト駆動の単位に acceptance.required_tests がありません。"
+                 "正解が定義されていないため、合否を判定できません")
+
+
 def require_repo_clean(c):
     """起動時にリポジトリがクリーンであることを要求する。
 
@@ -261,6 +292,8 @@ def require_repo_clean(c):
 
 def purge_holdout(c):
     """ソースと出力の両方から消す。片方だけでは PreserveNewest で次のランに混入する。"""
+    if c.test_driven:
+        return []          # この単位には非開示が無い
     removed = []
     for p in [c.sb(c.g["holdout_rel"])] + \
              list(c.sandbox.glob("tests/**/bin/**/" + Path(c.g["holdout_rel"]).name)) + \
@@ -329,7 +362,42 @@ def gate_whitelist(c):
     return bad
 
 
+def gate_static_common(c):
+    """単位の種類によらない検査。実装ファイル全部に対して行う。"""
+    impls = c.unit.get("impl_files") or c.unit["whitelist"]
+    for rel in impls:
+        p = c.sb(rel)
+        if not p.exists():
+            return f"{rel} が存在しません"
+        text = p.read_text(encoding="utf-8", errors="replace")
+
+        # forbidden_patterns: [[正規表現, 説明], ...]
+        # 新規機能では UnityEngine / Time.deltaTime / MonoBehaviour を禁じ、
+        # 仮想時間を外から注入する形（決定論的 FSM）を強制する。
+        for pattern, label in c.unit.get("forbidden_patterns", []):
+            if re.search(pattern, text):
+                return f"{label}: {rel} に「{pattern}」が含まれています"
+
+        if c.unit["forbidden_leftover"] in text:
+            return f"{c.unit['forbidden_leftover']} が残っています（{rel}）"
+        m = re.search(c.unit["forbidden_skip_attribute_regex"], text)
+        if m:
+            return f"skip 属性の使用: [{m.group(1)}]（{rel}）"
+    return None
+
+
 def gate_static(c):
+    if c.test_driven:
+        ng = gate_static_common(c)
+        if ng:
+            return ng
+        impls = c.unit.get("impl_files") or c.unit["whitelist"]
+        text = "\n".join(c.sb(r).read_text(encoding="utf-8", errors="replace") for r in impls)
+        missing = [s for s in c.unit["required_symbols"] if s not in text]
+        if missing:
+            return "シグネチャが揃っていません: " + ", ".join(missing)
+        return None
+
     core = c.sb(c.unit["core_impl"])
     so = c.sb(c.unit["so_impl"])
     if not core.exists():
@@ -501,8 +569,52 @@ def stage_golden(c, with_holdout):
     return staged
 
 
+def check_acceptance_test_driven(c, fast, unity):
+    """新規機能の判定。正解は分解役が先に書いたテスト。
+
+    ゴールデンが無いので「既存挙動と一致するか」は問えない。代わりに
+      1. 指定された新規テストが実際に実行され、全件通っていること
+      2. 既存のテストが 1 件も壊れていないこと（非回帰）
+    を要求する。1 が無いと「何も測っていない緑」になる。
+    """
+    ng = []
+    required = c.unit["acceptance"]["required_tests"]
+
+    for name in required:
+        hits = names_with(fast, name) + names_with(unity, name)
+        if not hits:
+            return [f"検査系故障: 新規テスト {name} が 1 件も実行されていない"], True
+        bad = [n for n in hits if (fast.get(n) or unity.get(n)) not in ("Passed",)]
+        if bad:
+            ng.append(f"新規テスト {name} が通っていない（{len(bad)} 件）")
+
+    if outcome_of(unity, c.ctrl_pass) != "Passed":
+        return ["検査系故障: 必ず通る対照群が通らなかった"], True
+
+    skipped = [n for n, o in unity.items() if o in ("Skipped", "Inconclusive")]
+    for name in required:
+        if [n for n in skipped if name in n]:
+            return [f"検査系故障: 新規テスト {name} が skip されている"], True
+    if len(skipped) > c.cfg["unity_skip_baseline"]:
+        ng.append(f"skip が既知の {c.cfg['unity_skip_baseline']} 件を超えた（{len(skipped)}）")
+
+    f_fail = [n for n, o in fast.items() if o == "Failed"]
+    u_fail = [n for n, o in unity.items() if o == "Failed"]
+    if f_fail:
+        ng.append(f"高速検査の失敗 {len(f_fail)} 件: " + ", ".join(f_fail[:3]))
+    if u_fail:
+        ng.append(f"Unity の失敗 {len(u_fail)} 件: " + ", ".join(u_fail[:3]))
+
+    c.metrics["unity_total"] = len(unity)
+    c.metrics["unity_skipped"] = len(skipped)
+    c.metrics["new_tests"] = sum(len(names_with(fast, n) + names_with(unity, n)) for n in required)
+    return ng, False
+
+
 def check_acceptance(c, fast, unity, expect_holdout):
     """終了コードではなく個別結果で判定する。"""
+    if c.test_driven:
+        return check_acceptance_test_driven(c, fast, unity)
     ng = []
     d_tag, h_tag = c.g["disclosed_tag"], c.g["holdout_tag"]
     want_d = golden_count(c, c.g["disclosed_rel"])
@@ -598,6 +710,19 @@ def attempt(c, feedback):
     if ng:
         return "RETRY", "; ".join(ng)
 
+    if c.test_driven:
+        print("[5] 非開示ゴールデンは無し（テスト駆動の単位）")
+    else:
+        failed = attempt_holdout(c, fast)
+        if failed:
+            return failed
+
+    print("[6] 持ち出し")
+    return carry_out_and_ci(c)
+
+
+def attempt_holdout(c, fast):
+    """非開示ゴールデンの検査。合格なら None、不合格なら (verdict, msg)。"""
     print("[5] Unity 受入（非開示）")
     try:
         stage_golden(c, with_holdout=True)
@@ -612,8 +737,11 @@ def attempt(c, feedback):
             return "RETRY", "非開示の受入条件に不合格でした（詳細は開示されません）"
     finally:
         purge_holdout(c)
+    return None
 
-    print("[6] 持ち出し")
+
+def carry_out_and_ci(c):
+    """ホワイトリストのファイルだけを本体へ運び、CI まで見届ける。"""
     # .meta を同伴させる。gate_whitelist は .meta を素通しにしてあるのに
     # 持ち出し側が運んでいなかった。その非対称のせいで、本体で次に Unity を
     # 起動した瞬間に .meta が生えて作業ツリーが汚れ、require_repo_clean が
@@ -786,6 +914,7 @@ def main():
     args = ap.parse_args()
 
     c = Ctx(args.config, args.unit)
+    require_unit_safe(c)
     require_repo_clean(c)
 
     if args.selftest:
