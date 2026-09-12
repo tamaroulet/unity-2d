@@ -1,0 +1,61 @@
+{
+  "_comment": "1 単位の定義。ms3_pipeline.py はこれを --unit で受け取る。パイプライン本体に単位を書かないことで、MS4 のスケジューラから別の単位を渡せる。",
+
+  "id": "metapoint",
+  "title": "MetaPointRules（純粋版）の実装と GameRulesSO 方式の委譲",
+
+  "_prompt_note": "{core_abs} {so_abs} {sandbox_abs} はパイプラインがサンドボックスの絶対パスに展開する。相対パスで渡すと実装AIが本体リポジトリを編集しうる（実測で発生した）",
+
+  "prompt": "作業対象は {sandbox_abs} の中だけです。この外にあるファイルは絶対に読み書きしないでください。\n\n{core_abs} を実装してください。現在は全メンバーが NotImplementedException を投げるスタブです。コンストラクタで受け取った4つの係数を保持し、4つのプロパティで返してください。CalculateEarnedPoints と ApplyRunResult は、{so_abs} にある同名メソッドとまったく同じ計算をしてください。ただし {core_abs} は UnityEngine を参照できないアセンブリにあるため、UnityEngine.Mathf.Max は使えません。System.Math.Max に置き換えてください（int 同士なら挙動は同一です）。あわせて {so_abs} の CalculateEarnedPoints と ApplyRunResult の中身を、MetaPointRules を new して委譲する形に差し替えてください。[SerializeField] の4フィールドと4つのプロパティ（TurnBonusPerTurn 等）は1文字も変更しないでください。クラス名・引数順・メソッド名も変更禁止です。この2ファイル以外を作成・変更しないでください。テストファイルと golden_*.json には触らないでください。[Ignore] と [Explicit] は使用禁止です。",
+
+  "whitelist": [
+    "Game/Assets/Core/MetaPointRules.cs",
+    "Game/Assets/Features/MetaProgression/Scripts/MetaPointResolverSO.cs"
+  ],
+
+  "core_impl": "Game/Assets/Core/MetaPointRules.cs",
+  "so_impl": "Game/Assets/Features/MetaProgression/Scripts/MetaPointResolverSO.cs",
+
+  "required_symbols": [
+    "class MetaPointRules",
+    "TurnBonusPerTurn",
+    "SkillBonusMultiplier",
+    "BossDefeatedBonus",
+    "GameClearBonus",
+    "CalculateEarnedPoints",
+    "ApplyRunResult"
+  ],
+
+  "_so_note": "インスペクタの直列化フィールドと getter を壊すと既存の .asset が読めなくなる",
+  "so_required_symbols": [
+    "class MetaPointResolverSO",
+    "ScriptableObject",
+    "[SerializeField] private int _turnBonusPerTurn",
+    "[SerializeField] private int _skillBonusMultiplier",
+    "[SerializeField] private int _bossDefeatedBonus",
+    "[SerializeField] private int _gameClearBonus",
+    "public int TurnBonusPerTurn",
+    "public int SkillBonusMultiplier",
+    "public int BossDefeatedBonus",
+    "public int GameClearBonus"
+  ],
+  "so_required_delegation": "new MetaPointRules",
+
+  "_forbidden_note": "Game.Core は noEngineReferences: true。Mathf を残すとコンパイル不能",
+  "forbidden_in_core_regex": "\\bMathf\\.",
+  "forbidden_leftover": "NotImplementedException",
+  "forbidden_skip_attribute_regex": "\\[\\s*(Ignore|Explicit)\\b",
+  "max_impl_lines": 200,
+
+  "golden": {
+    "source": "MetaPointResolverSO",
+    "disclosed_rel": "tests/golden/golden_metapoint_disclosed.json",
+    "holdout_src": "C:\\src\\.local\\oracles\\golden_metapoint_holdout.json",
+    "holdout_rel": "tests/golden/golden_metapoint_holdout.json",
+    "disclosed_tag": "golden_metapoint_disclosed",
+    "holdout_tag": "golden_metapoint_holdout"
+  },
+
+  "unity_test_filter": "Game.Tests.EditMode",
+  "fast_test_project": "tests/Core.Tests/Core.Tests.csproj"
+}

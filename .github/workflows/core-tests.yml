@@ -33,7 +33,7 @@ jobs:
       - name: 実行内容の検査（終了コードを信用しない）
         run: |
           python3 - <<'PY'
-          import glob, sys
+          import glob, json, os, sys
           import xml.etree.ElementTree as ET
 
           NS = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
@@ -49,10 +49,17 @@ jobs:
 
           got = {k: int(c.get(k, 0)) for k in ("total", "passed", "failed", "notExecuted")}
           names = [r.get("testName") or "" for r in root.iter(f"{NS}UnitTestResult")]
-          disclosed = [n for n in names if "golden_disclosed_" in n]
+
+          # 期待件数はゴールデン JSON 自身から導く。ここに数値を直書きしない。
+          # 直書きすると、ゴールデンを増やしたときに検査が古い件数のまま緑になる。
+          expected = {}
+          for gf in glob.glob("tests/golden/golden_*.json"):
+              tag = os.path.splitext(os.path.basename(gf))[0]
+              with open(gf, encoding="utf-8") as fh:
+                  expected[tag] = len(json.load(fh)["cases"])
 
           print(f"total={got['total']} passed={got['passed']} failed={got['failed']} "
-                f"skipped={got['notExecuted']} disclosed={len(disclosed)}")
+                f"skipped={got['notExecuted']}")
 
           ng = []
           # 「1件も実行しなくても終了コード 0」を潰す。既往事故そのもの。
@@ -64,8 +71,15 @@ jobs:
           if got["notExecuted"] > 0:
               ng.append(f"skip {got['notExecuted']} 件")
           # 対象のテストが実際に走ったことの確認。
-          if len(disclosed) < 18:
-              ng.append(f"開示ゴールデンが {len(disclosed)} 件しか実行されていない")
+          # ゴールデンごとに、JSON のケース数だけテストが走っていることを要求する。
+          # 走っていなければ「一致した」のではなく「見ていない」。
+          if not expected:
+              ng.append("tests/golden にゴールデンが 1 本も無い")
+          for tag, want in sorted(expected.items()):
+              hit = len([n for n in names if (tag + "_") in n])
+              print(f"  {tag}: {hit}/{want}")
+              if hit < want:
+                  ng.append(f"{tag} が {hit} 件しか実行されていない（期待 {want}）")
 
           for n in ng:
               print("  - " + n)
