@@ -253,6 +253,13 @@ def heads_match(c):
 
 TEST_PATH_RE = re.compile(r"(Tests?\.cs$|[/\\][Tt]ests?[/\\]|golden.*\.json$)")
 
+# 自己検査が [A] で一時的に書き込む中身。実装を消して赤が出ることを確かめるため。
+# 残っていたら selftest が異常終了している。
+STUB_MARKER = (
+    "// selftest が一時的に置いたスタブ。残っていたら selftest が途中で死んでいる。\n"
+    "namespace SelftestStub { public class Placeholder { } }\n"
+)
+
 
 def require_unit_safe(c):
     """単位定義そのものを検査する。
@@ -825,16 +832,48 @@ def selftest(c):
     repo_h, sb_h, ok = heads_match(c)
     check("サンドボックスがリポジトリに追従している", ok, f"{sb_h[:8]} / {repo_h[:8]}")
 
-    print("[A] ベースライン（スタブのまま）")
+    print("[A] ベースライン（自分でスタブに戻して赤を確認する）")
+    # 「今スタブである」ことを前提にしてはいけない。単位が一度でも成功すると
+    # 本体に実装が入り、この検査は空振りして常に緑になる（実測で発覚）。
+    # 自分でスタブを書き、赤が出ることを確かめてから戻す。
+    impls = c.unit.get("impl_files") or [c.unit.get("core_impl")] or c.unit["whitelist"]
+    stubbed = []
+    for rel in impls:
+        if not rel:
+            continue
+        p = c.sb(rel)
+        if p.exists():
+            stubbed.append((p, p.read_text(encoding="utf-8")))
+            p.write_text(STUB_MARKER, encoding="utf-8")
+
     fast, err = run_fast_tests(c, "self_fast")
     if err:
-        check("高速検査の実行", False, err)
-        return 2
-    d_tag = c.g["disclosed_tag"]
-    want_d = golden_count(c, c.g["disclosed_rel"])
-    hit = len(names_with(fast, d_tag + "_"))
-    check("開示ゴールデンが実行されている", hit >= want_d, f"{hit}/{want_d}")
-    check("スタブなので赤が出る", len(real_failures(fast, c.ctrl_fail, "Failed")) > 0,
+        # スタブはコンパイルを壊すので、ビルド失敗も「赤が出た」に含める
+        check("スタブで赤が出る", True, "ビルドが失敗（想定どおり）")
+        for p, orig in stubbed:
+            p.write_text(orig, encoding="utf-8")
+        sandbox_reset(c)
+        fast, err = run_fast_tests(c, "self_fast_restored")
+        if err:
+            check("復元後の高速検査", False, err)
+            return 2
+    else:
+        check("スタブで赤が出る", len(real_failures(fast, c.ctrl_fail, "Failed")) > 0,
+              f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
+        for p, orig in stubbed:
+            p.write_text(orig, encoding="utf-8")
+        sandbox_reset(c)
+        fast, err = run_fast_tests(c, "self_fast_restored")
+        if err:
+            check("復元後の高速検査", False, err)
+            return 2
+
+    if not c.test_driven:
+        d_tag = c.g["disclosed_tag"]
+        want_d = golden_count(c, c.g["disclosed_rel"])
+        hit = len(names_with(fast, d_tag + "_"))
+        check("開示ゴールデンが実行されている", hit >= want_d, f"{hit}/{want_d}")
+    check("復元後は緑に戻る", len(real_failures(fast, c.ctrl_fail, "Failed")) == 0,
           f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
 
     print("[B] ゲートの発火確認（わざと違反させます）")
@@ -850,16 +889,22 @@ def selftest(c):
     check("ホワイトリストが許可外を弾く", len(gate_whitelist(c)) > 0)
     junk.unlink()
 
-    core = c.sb(c.unit["core_impl"])
+    core_rel = c.unit.get("core_impl") or (c.unit.get("impl_files") or c.unit["whitelist"])[0]
+    core = c.sb(core_rel)
     orig = core.read_text(encoding="utf-8")
-    core.write_text("namespace X { public class MetaPointRules { } }", encoding="utf-8")
+
+    core.write_text("namespace X { public class Empty { } }", encoding="utf-8")
     ng = gate_static(c)
     check("シグネチャ破壊を弾く", ng is not None and "シグネチャ" in ng, str(ng))
 
-    core.write_text(orig.replace("throw new NotImplementedException()", "Mathf.Max(0, 0)"),
-                    encoding="utf-8")
+    # 禁止パターンは「元の文字列を置換する」ではなく、必ず含む形を自分で書く。
+    # 置換に頼ると、置換対象が無いとき（実装済みのとき）に空振りする（実測で発覚）。
+    forbidden = c.unit.get("forbidden_in_core_regex") or \
+        (c.unit.get("forbidden_patterns") or [["Mathf\\.", ""]])[0][0]
+    sample = re.sub(r"\\b|\\.", "", forbidden.split("|")[0]).strip("\\") or "Mathf"
+    core.write_text(orig + f"\n// probe: {sample}Max(0, 0)\n", encoding="utf-8")
     ng = gate_static(c)
-    check("Game.Core の Mathf を弾く", ng is not None and "Mathf" in ng, str(ng))
+    check("禁止パターンを弾く", ng is not None, str(ng))
 
     core.write_text(orig + "\n" + "// filler\n" * (c.unit["max_impl_lines"] + 50),
                     encoding="utf-8")
