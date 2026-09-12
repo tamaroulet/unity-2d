@@ -114,3 +114,12 @@ MS3 の本番実行は 7 回不合格になった。**実装AIは一度も間違
 # 追記ログ
 
 <!-- 以下、パイプラインが CI 通過のたびに末尾へ追記する。手で書かない。 -->
+
+## [2026-09-12 21:32] metapoint: MetaPointRules（純粋版）の実装と GameRulesSO 方式の委譲
+
+- **Status**: PASSED — commit `6778e9ad` / CI run 34693937638
+- **差分**: 45 行（上限 200）
+- **高速検査**: 58 件 / 失敗 0 / skip 0
+- **Unity**: 総数 197 / skip 20 / 開示 38 / 非開示 20 / control_must_fail=Failed
+- **試行**: 1 回目で合格
+- **Human Check Point**: 周回終了時の MetaPoints 獲得量。クリア時とゲームオーバー時で加算が想定どおりか。係数は MetaPointResolver の .asset（インスペクタ）の 4 つの値で調整できる
