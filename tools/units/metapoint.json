@@ -56,6 +56,8 @@
     "holdout_tag": "golden_metapoint_holdout"
   },
 
-  "unity_test_filter": "Game.Tests.EditMode",
+  "_hcp_note": "機械が書けない唯一の項目。人間が実機で何を見ればよいかを 1 行で書く。TIMELINE へそのまま転記される",
+  "human_check_point": "周回終了時の MetaPoints 獲得量。クリア時とゲームオーバー時で加算が想定どおりか。係数は MetaPointResolver の .asset（インスペクタ）の 4 つの値で調整できる",
+
   "fast_test_project": "tests/Core.Tests/Core.Tests.csproj"
 }

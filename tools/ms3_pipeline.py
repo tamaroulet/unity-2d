@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 
 TRX_NS = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
@@ -88,6 +89,10 @@ class Ctx:
         self.g = self.unit["golden"]
         self.out.mkdir(parents=True, exist_ok=True)
 
+        # TIMELINE への追記に使う実測値。各門が通るたびに埋まる。
+        # 手で書くと実態とずれても誰も気づかないので、判定に使った値をそのまま残す。
+        self.metrics = {}
+
     # ---- パス
     def sb(self, rel):
         return self.sandbox / rel.replace("/", "\\")
@@ -140,6 +145,40 @@ def sandbox_reset(c):
         sys.exit(f"ABORT: サンドボックスに開示ゴールデンがありません: {c.g['disclosed_rel']}")
 
 
+def append_timeline(c, sha):
+    """CI が緑になったときだけ、末尾に 1 件追記する。
+
+    追記のみ。既存行を書き換える経路をコードに持たせない（監査証跡のため）。
+    数値はすべて c.metrics から取る。手書きすると実態とずれても誰も気づかない
+    （自己検査の True 直書きと同じ型の事故になる）。
+    """
+    path = c.repo / "reports" / "TIMELINE.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    m = c.metrics
+
+    def g(key, default="?"):
+        v = m.get(key)
+        return default if v is None else v
+
+    hcp = c.unit.get("human_check_point") or "（単位定義に human_check_point がありません）"
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    entry = (
+        f"\n## [{stamp}] {c.unit['id']}: {c.unit.get('title', '')}\n\n"
+        f"- **Status**: PASSED — commit `{sha[:8]}` / CI run {g('ci_run_id')}\n"
+        f"- **差分**: {g('diff_lines')} 行（上限 {c.unit['max_impl_lines']}）\n"
+        f"- **高速検査**: {g('fast_total')} 件 / 失敗 {g('fast_failed')} / skip {g('fast_notExecuted')}\n"
+        f"- **Unity**: 総数 {g('unity_total')} / skip {g('unity_skipped')} / "
+        f"開示 {g('unity_disclosed')} / 非開示 {g('unity_holdout')} / "
+        f"control_must_fail={g('ctrl_fail')}\n"
+        f"- **試行**: {g('attempt')} 回目で合格\n"
+        f"- **Human Check Point**: {hcp}\n"
+    )
+    with path.open("a", encoding="utf-8") as f:
+        f.write(entry)
+    print(f"    追記: {path}")
+
+
 def wait_for_ci(c):
     """push した commit の run を名指しで待つ。
 
@@ -174,6 +213,7 @@ def wait_for_ci(c):
     if not run_id:
         return 2, f"CI の run が見つかりません (sha={sha[:8]})"
 
+    c.metrics["ci_run_id"] = run_id
     rc, _, err = run(["gh", "run", "watch", run_id, "--exit-status"],
                      c.repo, c.ttl["gh"], "gh run watch")
     if rc != 0:
@@ -333,6 +373,7 @@ def gate_diff_lines(c, verbose=True):
             add = 0 if parts[0] == "-" else int(parts[0])
             dele = 0 if parts[1] == "-" else int(parts[1])
             total += add + dele
+    c.metrics["diff_lines"] = total
     if verbose:
         print(f"    差分: {total} 行")
     if total > c.unit["max_impl_lines"]:
@@ -356,6 +397,11 @@ def run_fast_tests(c, tag):
     root = ET.parse(trx).getroot()
     results = {r.get("testName"): r.get("outcome")
                for r in root.iter(f"{TRX_NS}UnitTestResult")}
+
+    counters = root.find(f"{TRX_NS}ResultSummary/{TRX_NS}Counters")
+    if counters is not None:
+        for k in ("total", "passed", "failed", "notExecuted"):
+            c.metrics[f"fast_{k}"] = int(counters.get(k, 0))
     return results, None
 
 
@@ -488,6 +534,14 @@ def check_acceptance(c, fast, unity, expect_holdout):
     if u_fail:
         ng.append(f"Unity の不一致 {len(u_fail)} 件: " + ", ".join(u_fail[:3]))
 
+    # TIMELINE に載せる実測値。判定に使った数をそのまま残す。
+    c.metrics["unity_total"] = len(unity)
+    c.metrics["unity_skipped"] = len(skipped)
+    c.metrics["unity_disclosed"] = hit_u
+    if expect_holdout:
+        c.metrics["unity_holdout"] = len(leaked)
+        c.metrics["ctrl_fail"] = outcome_of(unity, c.ctrl_fail)
+
     return ng, False
 
 
@@ -549,12 +603,22 @@ def attempt(c, feedback):
         purge_holdout(c)
 
     print("[6] 持ち出し")
+    # .meta を同伴させる。gate_whitelist は .meta を素通しにしてあるのに
+    # 持ち出し側が運んでいなかった。その非対称のせいで、本体で次に Unity を
+    # 起動した瞬間に .meta が生えて作業ツリーが汚れ、require_repo_clean が
+    # ABORT する（Step 1 のマージ時に顕在化した）。
+    carried = []
     for rel in c.unit["whitelist"]:
-        src = c.sb(rel)
-        dst = c.repo / rel.replace("/", "\\")
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
-    run(["git", "add", "--"] + c.unit["whitelist"], c.repo, c.ttl["git"], "add")
+        for cand in (rel, rel + ".meta"):
+            src = c.sb(cand)
+            if not src.exists():
+                continue          # tools/ 配下など .meta を持たないものもある
+            dst = c.repo / cand.replace("/", "\\")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+            carried.append(cand)
+    print(f"    {len(carried)} ファイル: " + ", ".join(Path(x).name for x in carried))
+    run(["git", "add", "--"] + carried, c.repo, c.ttl["git"], "add")
     run(["git", "commit", "-m",
          f"feat(ms3): implement {c.unit['id']} via pipeline"],
         c.repo, c.ttl["git"], "commit")
@@ -572,6 +636,16 @@ def attempt(c, feedback):
         return "RETRY", "CI が赤でした（差し戻し済み）"
 
     print(f"    {ci_msg}")
+
+    print("[8] TIMELINE へ追記")
+    _, sha_out, _ = run(["git", "rev-parse", "HEAD"], c.repo, c.ttl["git"], "head")
+    append_timeline(c, sha_out.strip())
+    run(["git", "add", "--", "reports/TIMELINE.md"], c.repo, c.ttl["git"], "add timeline")
+    run(["git", "commit", "-m", f"docs(timeline): record {c.unit['id']}"],
+        c.repo, c.ttl["git"], "commit timeline")
+    # この追記コミットの CI は watch しない（内容は Markdown のみ）。
+    run(["git", "push"], c.repo, c.ttl["git"], "push timeline")
+
     return "SUCCESS", ""
 
 
@@ -696,6 +770,7 @@ def main():
     max_retry = c.cfg["gates"]["max_retry"]
     for i in range(max_retry + 1):
         print(f"=== 試行 {i + 1}/{max_retry + 1} ===")
+        c.metrics["attempt"] = i + 1
         verdict, msg = attempt(c, feedback)
         history.append((verdict, msg))
 
