@@ -139,6 +139,18 @@ def sandbox_reset(c):
         sys.exit(f"ABORT: サンドボックスに開示ゴールデンがありません: {c.g['disclosed_rel']}")
 
 
+def heads_match(c):
+    """リポジトリとサンドボックスの HEAD を比べる。(repo, sandbox, 一致か) を返す。
+
+    比較を関数に出しておくのは、自己検査から「わざとずらした状態」で直接呼べる
+    ようにするため。sandbox_reset の中で比べるだけだと、外からずらしても
+    reset が先に走って直してしまい、負のテストが成立しない。
+    """
+    _, r, _ = run(["git", "rev-parse", "HEAD"], c.repo, c.ttl["git"], "repo head")
+    _, s, _ = run(["git", "rev-parse", "HEAD"], c.sandbox, c.ttl["git"], "sandbox head")
+    return r.strip(), s.strip(), (r.strip() == s.strip() and bool(r.strip()))
+
+
 def require_repo_clean(c):
     """起動時にリポジトリがクリーンであることを要求する。
 
@@ -532,8 +544,8 @@ def selftest(c):
 
     print("=== 門の自己検査（実装AIは呼びません） ===")
     sandbox_reset(c)
-    _, sb_head, _ = run(["git", "rev-parse", "HEAD"], c.sandbox, c.ttl["git"], "sandbox head")
-    check("サンドボックスがリポジトリに追従している", True, sb_head.strip()[:8])
+    repo_h, sb_h, ok = heads_match(c)
+    check("サンドボックスがリポジトリに追従している", ok, f"{sb_h[:8]} / {repo_h[:8]}")
 
     print("[A] ベースライン（スタブのまま）")
     fast, err = run_fast_tests(c, "self_fast")
@@ -548,6 +560,13 @@ def selftest(c):
           f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
 
     print("[B] ゲートの発火確認（わざと違反させます）")
+    # 同期のずれを検出できるか。sandbox_reset を呼ばずに直接比較する
+    # （呼ぶと先に直ってしまい、検出できたかが分からない）。
+    run(["git", "reset", "--hard", "HEAD~1"], c.sandbox, c.ttl["git"], "desync")
+    _, _, ok = heads_match(c)
+    check("同期のずれを検出する", not ok)
+    sandbox_reset(c)
+
     junk = c.sandbox / "junk_not_allowed.txt"
     junk.write_text("x", encoding="utf-8")
     check("ホワイトリストが許可外を弾く", len(gate_whitelist(c)) > 0)
