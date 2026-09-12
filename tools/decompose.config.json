@@ -4,8 +4,13 @@
   "repo": "tamaroulet/unity-2d",
   "cli": "claude",
   "headless_flag": "-p",
-  "extra_flags": ["--permission-mode", "plan"],
-  "_flags_note": "分解役はファイルを直接書かない。JSON を返させ、書き出しは decompose.py が行う。読み取りは許すが書き込みは許さない",
+
+  "_flags_note": "読み取りだけを許す。書き込み系を渡さないので、分解役はファイルを直接作れない。JSON を返させ、書き出しは decompose.py が検査を通してから行う。plan モードは対話的な計画提示に寄るため使わない",
+  "extra_flags": ["--allowedTools", "Read,Grep,Glob"],
+
+  "_prompt_file_note": "改行を含む長文を引数で渡すと cmd.exe が最初の改行で切る（実測）。ファイルで渡す。リポジトリの外に置き、作業ツリーを汚さない",
+  "prompt_file": "C:\\src\\.local\\out\\decompose\\prompt.md",
+  "prompt_arg_template": "{prompt_file} を読み、そこに書かれた指示に厳密に従って JSON だけを返してください。前後に説明を書かないでください。",
 
   "test_dir": "tests/Core.Tests",
   "impl_dir": "Game/Assets/Core",

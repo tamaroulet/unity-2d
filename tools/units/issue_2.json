@@ -1,0 +1,53 @@
+{
+  "id": "issue_2",
+  "title": "ボスの突進に 0.2 秒のタメ状態を追加する",
+  "prompt": "ボスの突進の前に置く「タメ（予備動作）」を、決定論的な純粋 C# の状態機械として新規実装してください。\n\n## 作るもの\n\n1. Game/Assets/Core/Data/BossChargePhase.cs\n   - namespace Game.Features.Boss\n   - public enum BossChargePhase { Idle, Charging, Dashing }（この綴り、この順）\n\n2. Game/Assets/Core/BossChargeState.cs\n   - namespace Game.Features.Boss、public class BossChargeState\n   - public const float DefaultChargeSeconds = 0.2f\n   - コンストラクタは BossChargeState()（= DefaultChargeSeconds を使う）と BossChargeState(float chargeSeconds) の 2 本\n   - public float ChargeSeconds { get; } … コンストラクタ引数を保持する。負値と NaN は 0 に丸める\n   - public BossChargePhase Phase { get; private set; } … 初期値は Idle\n   - public float ElapsedSeconds { get; private set; } … タメ開始からの積算秒。初期値は 0\n   - public void BeginCharge() … Phase を Charging にし、ElapsedSeconds を 0 に戻す。Dashing 中に呼ばれても同じ（次の突進にも必ずタメを要求する）\n   - public void Reset() … Phase を Idle に、ElapsedSeconds を 0 に戻す\n   - public void Update(float deltaSeconds) … 仮想時間を進める唯一の入口\n\n## Update の規則（これが仕様の本体）\n\n- Phase が Charging 以外のとき Update は何もしない。Idle のまま何秒進めても Dashing にならない（BeginCharge 無しの突進を禁じる）\n- deltaSeconds が 0 以下・NaN・±無限大のときは積算しない。負値でタイマーを巻き戻してはならない\n- 積算した後、ElapsedSeconds >= ChargeSeconds なら Phase を Dashing にする。「ちょうど閾値」は Dashing 側に入れる（0.2 秒ちょうどで突進）\n- Dashing に入った後は Update を呼んでも Phase も ElapsedSeconds も変わらない\n- ChargeSeconds が 0 のときは、BeginCharge 直後は Charging、最初の Update（dt = 0 でも）で Dashing\n\n## 触ってよいファイル\n\nwhitelist の 2 ファイルだけです。既存ファイルの変更、Unity 側（Game/Assets/Features/Boss 以下）への配線、シーンやアセットの編集はこの単位の範囲外です。.meta は Unity が生成するので手で書かないこと。\n\n## してはいけないこと\n\n- UnityEngine / MonoBehaviour / UnityEngine.Mathf への依存。Game.Core は noEngineReferences: true なので、clamp は System.Math を使う\n- UnityEngine.Time.deltaTime などグローバル時間の参照。時間は Update の引数だけから来る\n- 乱数、現在時刻、静的な可変状態\n- tests/ 以下の変更。受入テストは既に置かれており、実装役が触れてはならない唯一のオラクルです\n- サブフォルダの新設。tests/Core.Tests/Core.Tests.csproj は Game/Assets/Core/*.cs と Game/Assets/Core/Data/*.cs だけを直接コンパイルするので、上記のパスのまま置かないとビルド対象から外れます\n- C# 10 以降の構文と暗黙 using。LangVersion は Unity 6 に合わせて 9.0 に固定されています",
+  "whitelist": [
+    "Game/Assets/Core/BossChargeState.cs",
+    "Game/Assets/Core/Data/BossChargePhase.cs"
+  ],
+  "required_symbols": [
+    "BossChargePhase",
+    "BossChargeState",
+    "DefaultChargeSeconds",
+    "ChargeSeconds",
+    "ElapsedSeconds",
+    "Phase",
+    "BeginCharge",
+    "Update",
+    "Reset"
+  ],
+  "acceptance": {
+    "required_tests": [
+      "BossChargeStateTests"
+    ]
+  },
+  "human_check_point": "実機で突進の直前に約 0.2 秒の溜め動作が見え、その間に回避へ動き出せる余地が実際にあるか",
+  "fast_test_project": "tests/Core.Tests/Core.Tests.csproj",
+  "forbidden_leftover": "NotImplementedException",
+  "forbidden_skip_attribute_regex": "\\[\\s*(Ignore|Explicit)\\b",
+  "max_impl_lines": 250,
+  "forbidden_patterns": [
+    [
+      "\\bUnityEngine\\b",
+      "UnityEngine への依存"
+    ],
+    [
+      "\\bMonoBehaviour\\b",
+      "MonoBehaviour への依存"
+    ],
+    [
+      "\\bTime\\.(deltaTime|time|fixedDeltaTime)\\b",
+      "グローバル時間への依存"
+    ],
+    [
+      "\\bUnityEngine\\.Random\\b|\\bnew Random\\s*\\(\\s*\\)",
+      "非決定な乱数"
+    ]
+  ],
+  "selftest_forbidden_probe": "UnityEngine.Debug.Log(0);",
+  "impl_files": [
+    "Game/Assets/Core/BossChargeState.cs",
+    "Game/Assets/Core/Data/BossChargePhase.cs"
+  ]
+}
