@@ -9,6 +9,9 @@ namespace StandaloneCore.Tests
 {
     public class GoldenMasterTests
     {
+        /// <summary>このランナーが受け付けるゴールデンの出所。JSON の source と一致しないものは読まない。</summary>
+        private const string ExpectedSource = "GameRulesSO.CreateInitialState";
+
         // 対照群（必ず通る）。落ちたらテスト実行環境そのものの故障。
         [Test]
         public void AlwaysPasses_ControlGroup()
@@ -61,6 +64,13 @@ namespace StandaloneCore.Tests
             {
                 Golden g = JsonSerializer.Deserialize<Golden>(File.ReadAllText(path), opts);
                 if (g?.cases == null) continue;
+
+                // 他機能のゴールデンを誤読しない。
+                // これが無いと golden_metapoint_*.json も読み込まれ、型が合わないため
+                // 入力も期待値もすべて既定値 0 になり、new GameRules(0,...) の出力 0 と
+                // 「0 == 0」で一致して全件が偽陽性で緑になる（実測で発生した事故）。
+                if (!string.Equals(g.source, ExpectedSource, StringComparison.Ordinal)) continue;
+
                 string tag = Path.GetFileNameWithoutExtension(path);
                 foreach (Case c in g.cases)
                 {
