@@ -5,7 +5,26 @@
     "repo": "C:\\src\\unity-2d",
     "unity_project_subdir": "Game",
     "out_dir": "C:\\src\\.local\\out\\ms3",
-    "oracles_dir": "C:\\src\\.local\\oracles"
+    "oracles_dir": "C:\\src\\.local\\oracles",
+    "_sandbox_note": "実装AIの唯一の作業場。worktree なので本体に触れない",
+    "sandbox": "C:\\src\\.local\\wt\\ms3-sandbox"
+  },
+
+  "unity_exe": "C:\\Program Files\\Unity\\Hub\\Editor\\6000.3.23f1\\Editor\\Unity.exe",
+
+  "_skip_note": "既存の [Explicit] による skip。GameFlowControllerTests 13 / GameFlowControllerRelicTests 4 / GameMonteCarloSimulationTests 3。これを超えたら新たに無効化されたテストがある",
+  "unity_skip_baseline": 20,
+
+  "gates": {
+    "max_retry": 2
+  },
+
+  "implementer": {
+    "cli": "agy",
+    "headless_flag": "-p",
+    "auto_approve_flag": "--dangerously-skip-permissions",
+    "model_flag": "--model",
+    "model_name": "gemini-3.8-flash-high"
   },
 
   "rel": {
@@ -80,7 +99,12 @@
     "min_null_guard_per_method": 1
   },
 
+  "_ttl_note": "すべて実測に基づく。Unity は Library 無しの初回 11.9 分を吸収できる値",
   "ttl_seconds": {
-    "unity": 1800
+    "git": 120,
+    "implementer": 300,
+    "dotnet_test": 300,
+    "unity": 1800,
+    "gh": 600
   }
 }

@@ -424,8 +424,16 @@ Write-Host ("    開示 {0} / 非開示 {1}（対照群を含む）" -f $disclos
 
 # ---------------------------------------------------------------- 5. 配置
 Write-Host "[5] 配置" -ForegroundColor Cyan
-Write-Utf8 $DisclosedDst ([pscustomobject]@{ source = $all.source; cases = $disclosed } | ConvertTo-Json -Depth 10)
-Write-Utf8 $HoldoutDst   ([pscustomobject]@{ source = $all.source; cases = $holdout   } | ConvertTo-Json -Depth 10)
+# 1 ケース 1 行で書く。整形出力にすると、入れ子を正規表現で切り出す読み手
+# （Unity 側テスト。Newtonsoft が無く JsonUtility は "in" を扱えない）が壊れる。
+function Write-Golden($Path, $Source, $Cases) {
+    $lines = @($Cases | ForEach-Object { $_ | ConvertTo-Json -Depth 10 -Compress })
+    $text = "{`n  `"source`": `"$Source`",`n  `"cases`": [`n    " + ($lines -join ",`n    ") + "`n  ]`n}`n"
+    Write-Utf8 $Path $text
+}
+
+Write-Golden $DisclosedDst $all.source $disclosed
+Write-Golden $HoldoutDst   $all.source $holdout
 
 # ---------------------------------------------------------------- 6. 配置先の検証（削除の前）
 Write-Host "[6] 配置先の検証" -ForegroundColor Cyan
