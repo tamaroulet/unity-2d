@@ -897,14 +897,17 @@ def selftest(c):
     ng = gate_static(c)
     check("シグネチャ破壊を弾く", ng is not None and "シグネチャ" in ng, str(ng))
 
-    # 禁止パターンは「元の文字列を置換する」ではなく、必ず含む形を自分で書く。
-    # 置換に頼ると、置換対象が無いとき（実装済みのとき）に空振りする（実測で発覚）。
-    forbidden = c.unit.get("forbidden_in_core_regex") or \
-        (c.unit.get("forbidden_patterns") or [["Mathf\\.", ""]])[0][0]
-    sample = re.sub(r"\\b|\\.", "", forbidden.split("|")[0]).strip("\\") or "Mathf"
-    core.write_text(orig + f"\n// probe: {sample}Max(0, 0)\n", encoding="utf-8")
-    ng = gate_static(c)
-    check("禁止パターンを弾く", ng is not None, str(ng))
+    # 禁止パターンの発火確認。
+    # 正規表現から「違反する文字列」を組み立てようとして外した（実測）。
+    # 単位定義に、違反そのものを literal で書かせる。導出しない。
+    probe = c.unit.get("selftest_forbidden_probe")
+    if not probe:
+        check("禁止パターンを弾く", False,
+              "単位定義に selftest_forbidden_probe がありません（何が違反かを宣言してください）")
+    else:
+        core.write_text(orig + f"\n// probe: {probe}\n", encoding="utf-8")
+        ng = gate_static(c)
+        check("禁止パターンを弾く", ng is not None, str(ng))
 
     core.write_text(orig + "\n" + "// filler\n" * (c.unit["max_impl_lines"] + 50),
                     encoding="utf-8")

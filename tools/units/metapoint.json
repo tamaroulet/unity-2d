@@ -43,6 +43,8 @@
 
   "_forbidden_note": "Game.Core は noEngineReferences: true。Mathf を残すとコンパイル不能",
   "forbidden_in_core_regex": "\\bMathf\\.",
+  "_probe_note": "自己検査が禁止パターンの発火を確かめるために書き込む literal。正規表現から組み立てると外す（実測）",
+  "selftest_forbidden_probe": "Mathf.Max(0, 0)",
   "forbidden_leftover": "NotImplementedException",
   "forbidden_skip_attribute_regex": "\\[\\s*(Ignore|Explicit)\\b",
   "max_impl_lines": 200,
