@@ -319,11 +319,20 @@ def call_implementer(c, feedback=""):
     # 「間違えにくくする」だけで、脱走を防ぐ機構ではない。
     # 実際の防波堤は gate_repo_untouched（検出して ABORT）。
     prompt = c.unit["prompt"]
-    for token, rel in (("{core_abs}", c.unit["core_impl"]),
-                       ("{so_abs}", c.unit["so_impl"]),
-                       ("{sandbox_abs}", None)):
-        value = str(c.sandbox) if rel is None else str(c.sb(rel))
+    # 単位の種類でキーが違う。無いトークンは置換しないだけで、エラーにしない。
+    tokens = {"{sandbox_abs}": str(c.sandbox)}
+    if c.unit.get("core_impl"):
+        tokens["{core_abs}"] = str(c.sb(c.unit["core_impl"]))
+    if c.unit.get("so_impl"):
+        tokens["{so_abs}"] = str(c.sb(c.unit["so_impl"]))
+    for i, rel in enumerate(c.unit.get("impl_files") or c.unit["whitelist"]):
+        tokens[f"{{impl_abs_{i}}}"] = str(c.sb(rel))
+    for token, value in tokens.items():
         prompt = prompt.replace(token, value)
+
+    # 作業場所を必ず伝える。相対パスだけだと本体を編集しうる（実測で発生した）。
+    prompt = (f"作業対象は {c.sandbox} の中だけです。この外にあるファイルは"
+              f"絶対に読み書きしないでください。\n\n" + prompt)
     if feedback:
         prompt += "\n\n前回の失敗:\n" + feedback
 
@@ -448,6 +457,11 @@ def gate_static(c):
 
 
 def gate_diff_lines(c, verbose=True):
+    # 未追跡のファイルは git diff に出ない。新規単位では実装ファイルが
+    # 丸ごと新規なので、これをやらないと差分が常に 0 になり門が発火しない
+    # （実測で発覚。自己検査だけでなく本番の穴だった）。
+    # -N は intent-to-add。中身はステージせず、diff に現れるようにするだけ。
+    run(["git", "add", "-N", "--"] + c.unit["whitelist"], c.sandbox, c.ttl["git"], "intent-to-add")
     total = 0
     for rel in c.unit["whitelist"]:
         _, out, _ = run(["git", "diff", "--numstat", "HEAD", "--", rel],
@@ -481,8 +495,21 @@ def run_fast_tests(c, tag):
         return None, "検査系故障: TRX が生成されませんでした（ビルド失敗の可能性）"
 
     root = ET.parse(trx).getroot()
-    results = {r.get("testName"): r.get("outcome")
-               for r in root.iter(f"{TRX_NS}UnitTestResult")}
+
+    # TRX の testName はメソッド名だけで、クラス名は別要素の className にある。
+    # required_tests はクラス名で書かれるので、メソッド名だけを探すと
+    # 「1 件も実行されていない」と誤判定する（実測。実装は成功していた）。
+    # className.methodName の形に組み立ててから照合する。
+    fullname = {}
+    for ut in root.iter(f"{TRX_NS}UnitTest"):
+        tm = ut.find(f"{TRX_NS}TestMethod")
+        if tm is not None and ut.get("name"):
+            fullname[ut.get("name")] = f"{tm.get('className', '')}.{ut.get('name')}"
+
+    results = {}
+    for r in root.iter(f"{TRX_NS}UnitTestResult"):
+        n = r.get("testName")
+        results[fullname.get(n, n)] = r.get("outcome")
 
     counters = root.find(f"{TRX_NS}ResultSummary/{TRX_NS}Counters")
     if counters is not None:
@@ -785,6 +812,11 @@ def carry_out_and_ci(c):
          f"feat(ms3): implement {c.unit['id']} via pipeline"],
         c.repo, c.ttl["git"], "commit")
     rc, out, err = run(["git", "push"], c.repo, c.ttl["git"], "push")
+    if rc != 0 and "no upstream branch" in (err + out):
+        # 新しいブランチで初めて push するとき。追跡先を設定して張り直す。
+        _, br, _ = run(["git", "branch", "--show-current"], c.repo, c.ttl["git"], "branch")
+        rc, out, err = run(["git", "push", "--set-upstream", "origin", br.strip()],
+                           c.repo, c.ttl["git"], "push -u")
     if rc != 0:
         return "ABORT", f"push できません: {(err or out)[:300]}"
 
@@ -832,34 +864,50 @@ def selftest(c):
     repo_h, sb_h, ok = heads_match(c)
     check("サンドボックスがリポジトリに追従している", ok, f"{sb_h[:8]} / {repo_h[:8]}")
 
-    print("[A] ベースライン（自分でスタブに戻して赤を確認する）")
-    # 「今スタブである」ことを前提にしてはいけない。単位が一度でも成功すると
-    # 本体に実装が入り、この検査は空振りして常に緑になる（実測で発覚）。
-    # 自分でスタブを書き、赤が出ることを確かめてから戻す。
-    impls = c.unit.get("impl_files") or [c.unit.get("core_impl")] or c.unit["whitelist"]
-    stubbed = []
-    for rel in impls:
-        if not rel:
-            continue
-        p = c.sb(rel)
-        if p.exists():
+    impls = [r for r in (c.unit.get("impl_files") or [c.unit.get("core_impl")]
+                         or c.unit["whitelist"]) if r]
+    existing = [r for r in impls if c.sb(r).exists()]
+
+    if not existing:
+        # 新規単位。実装ファイルがまだ無い（実装役がこれから作る）。
+        # ベースラインは本質的に赤であり、戻すべき緑が存在しない。
+        # ここで確かめられるのは「オラクルが置かれていて、かつ赤であること」まで。
+        print("[A] ベースライン（新規単位。実装はまだ無い）")
+
+        missing_tests = []
+        for t in c.unit["acceptance"]["required_tests"]:
+            found = list(c.sandbox.rglob(f"*{t}*.cs"))
+            if not found:
+                missing_tests.append(t)
+        check("受入テストがサンドボックスに置かれている",
+              not missing_tests,
+              "見つからない: " + ", ".join(missing_tests) if missing_tests else "")
+
+        fast, err = run_fast_tests(c, "self_fast")
+        if err:
+            check("実装が無いので赤", True, "ビルドが失敗（実装が無いので当然）")
+        else:
+            red = len(real_failures(fast, c.ctrl_fail, "Failed"))
+            check("実装が無いので赤", red > 0, f"{red} 件 Failed")
+    else:
+        # 既存の実装がある単位。自分でスタブを書き、赤が出ることを確かめてから戻す。
+        # 「今スタブである」ことを前提にしてはいけない。単位が一度でも成功すると
+        # 本体に実装が入り、この検査は空振りして常に緑になる（実測で発覚）。
+        print("[A] ベースライン（自分でスタブに戻して赤を確認する）")
+        stubbed = []
+        for rel in existing:
+            p = c.sb(rel)
             stubbed.append((p, p.read_text(encoding="utf-8")))
             p.write_text(STUB_MARKER, encoding="utf-8")
 
-    fast, err = run_fast_tests(c, "self_fast")
-    if err:
-        # スタブはコンパイルを壊すので、ビルド失敗も「赤が出た」に含める
-        check("スタブで赤が出る", True, "ビルドが失敗（想定どおり）")
-        for p, orig in stubbed:
-            p.write_text(orig, encoding="utf-8")
-        sandbox_reset(c)
-        fast, err = run_fast_tests(c, "self_fast_restored")
+        fast, err = run_fast_tests(c, "self_fast")
         if err:
-            check("復元後の高速検査", False, err)
-            return 2
-    else:
-        check("スタブで赤が出る", len(real_failures(fast, c.ctrl_fail, "Failed")) > 0,
-              f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
+            # スタブはコンパイルを壊すので、ビルド失敗も「赤が出た」に含める
+            check("スタブで赤が出る", True, "ビルドが失敗（想定どおり）")
+        else:
+            red = len(real_failures(fast, c.ctrl_fail, "Failed"))
+            check("スタブで赤が出る", red > 0, f"{red} 件 Failed")
+
         for p, orig in stubbed:
             p.write_text(orig, encoding="utf-8")
         sandbox_reset(c)
@@ -868,13 +916,13 @@ def selftest(c):
             check("復元後の高速検査", False, err)
             return 2
 
-    if not c.test_driven:
-        d_tag = c.g["disclosed_tag"]
-        want_d = golden_count(c, c.g["disclosed_rel"])
-        hit = len(names_with(fast, d_tag + "_"))
-        check("開示ゴールデンが実行されている", hit >= want_d, f"{hit}/{want_d}")
-    check("復元後は緑に戻る", len(real_failures(fast, c.ctrl_fail, "Failed")) == 0,
-          f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
+        if not c.test_driven:
+            d_tag = c.g["disclosed_tag"]
+            want_d = golden_count(c, c.g["disclosed_rel"])
+            hit = len(names_with(fast, d_tag + "_"))
+            check("開示ゴールデンが実行されている", hit >= want_d, f"{hit}/{want_d}")
+        check("復元後は緑に戻る", len(real_failures(fast, c.ctrl_fail, "Failed")) == 0,
+              f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
 
     print("[B] ゲートの発火確認（わざと違反させます）")
     # 同期のずれを検出できるか。sandbox_reset を呼ばずに直接比較する
@@ -891,7 +939,21 @@ def selftest(c):
 
     core_rel = c.unit.get("core_impl") or (c.unit.get("impl_files") or c.unit["whitelist"])[0]
     core = c.sb(core_rel)
-    orig = core.read_text(encoding="utf-8")
+    # 新規単位では実装ファイルがまだ無い。門は「ファイルの中身」を見るので、
+    # 検査のあいだだけ実体を作る。終わったら消す（作りっぱなしにすると
+    # 次の gate_whitelist が許可外として拾う）。
+    core_existed = core.exists()
+    orig = core.read_text(encoding="utf-8") if core_existed else ""
+
+    # 実装ファイルが複数ある単位では、1 本だけ作っても別の「存在しません」で
+    # 門が落ち、何を検査しているのか分からなくなる（実測）。全部そろえる。
+    created = []
+    for rel in (c.unit.get("impl_files") or c.unit["whitelist"]):
+        p = c.sb(rel)
+        if not p.exists():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("// selftest probe placeholder\n", encoding="utf-8")
+            created.append(p)
 
     core.write_text("namespace X { public class Empty { } }", encoding="utf-8")
     ng = gate_static(c)
@@ -913,8 +975,43 @@ def selftest(c):
                     encoding="utf-8")
     ng = gate_diff_lines(c, verbose=False)
     check("差分行数を弾く", ng is not None, str(ng))
+
+    for p in created:
+        p.unlink(missing_ok=True)      # 検査のために作った実体を残さない
+    if not core_existed:
+        core.unlink(missing_ok=True)
     core.write_text(orig, encoding="utf-8")
     sandbox_reset(c)
+
+    if c.test_driven:
+        # この単位には非開示ゴールデンが無い。[C][D] は非開示の投入と残留の検査
+        # なので、成立しない。代わりに「新規テストが Unity 側でも実行されること」
+        # を確かめる。ここを飛ばすと、Unity 側で 1 件も走らなくても気づけない。
+        # 新規テストは tests/Core.Tests（dotnet 側）にある。Unity はそこを
+        # コンパイルしないので、Unity 結果に現れないのが正常（実測で確認）。
+        # Unity 側の役目はこの単位では非回帰だけ。実装前に既存が壊れていない
+        # ことを確かめる。ここを飛ばすと、新規ファイルが Unity を巻き込んで
+        # 壊していても気づけない。
+        print("[C] 非開示は無し。Unity 側の非回帰だけを見る")
+        stage_golden(c, with_holdout=False)
+        unity, err = run_unity_tests(c, "self_td")
+        if err:
+            check("Unity が実行できる", False, err)
+        else:
+            failed = [n for n, o in unity.items() if o == "Failed"]
+            skipped = [n for n, o in unity.items() if o in ("Skipped", "Inconclusive")]
+            check("実装前でも Unity は緑", len(failed) == 0,
+                  f"{len(failed)} 件 Failed / {len(unity)} 件中")
+            check("skip が既定どおり", len(skipped) <= c.cfg["unity_skip_baseline"],
+                  f"{len(skipped)} / 上限 {c.cfg['unity_skip_baseline']}")
+        sandbox_reset(c)
+        ng_count = sum(1 for ok in log if not ok)
+        print()
+        if ng_count:
+            print(f"自己検査 NG: {ng_count} 件。門が効いていないので本番を回しません。")
+            return 2
+        print("自己検査 すべて OK。門は赤を出せる状態です。")
+        return 0
 
     print("[C] 非開示の投入")
     try:

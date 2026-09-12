@@ -77,8 +77,36 @@ def build_prompt(unit_id, title, body):
     )
 
 
+def resolve_cli(name):
+    """Windows で npm 導入の CLI は .cmd の shim。subprocess は拡張子なしを解決しない。
+
+    agy で同じことが起きたのと同型。shutil.which で実体を引く。
+    """
+    import shutil
+    for cand in (name + ".cmd", name + ".exe", name):
+        p = shutil.which(cand)
+        if p:
+            return p
+    sys.exit(f"{name} CLI が PATH に見つかりません")
+
+
 def call_claude(prompt):
-    args = [CFG["cli"], CFG["headless_flag"], prompt] + CFG["extra_flags"]
+    """プロンプトはファイルで渡す。引数に載せない。
+
+    claude は npm の .cmd shim なので、起動時に cmd.exe が引数を解釈する。
+    **改行を含む引数は最初の改行で切られる**（実測: 1669 文字のうち 1 行目しか
+    届かず、分解役が「対象が渡っていません」と応答した）。
+    短い 1 行の指示だけを引数に置き、本体はファイルから読ませる。
+
+    リポジトリの外に書く。ここを汚すとパイプラインの require_repo_clean が
+    次回 ABORT する。
+    """
+    pf = Path(CFG["prompt_file"])
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.write_text(prompt, encoding="utf-8")
+
+    args = [resolve_cli(CFG["cli"]), CFG["headless_flag"],
+            CFG["prompt_arg_template"].format(prompt_file=pf)] + CFG["extra_flags"]
     rc, out, err = run(args, CFG["ttl_seconds"]["claude"], "claude")
     if rc != 0:
         sys.exit(f"分解役が異常終了 (rc={rc}): {(err or out)[:500]}")
