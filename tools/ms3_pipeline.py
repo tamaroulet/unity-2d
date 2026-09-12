@@ -319,11 +319,20 @@ def call_implementer(c, feedback=""):
     # 「間違えにくくする」だけで、脱走を防ぐ機構ではない。
     # 実際の防波堤は gate_repo_untouched（検出して ABORT）。
     prompt = c.unit["prompt"]
-    for token, rel in (("{core_abs}", c.unit["core_impl"]),
-                       ("{so_abs}", c.unit["so_impl"]),
-                       ("{sandbox_abs}", None)):
-        value = str(c.sandbox) if rel is None else str(c.sb(rel))
+    # 単位の種類でキーが違う。無いトークンは置換しないだけで、エラーにしない。
+    tokens = {"{sandbox_abs}": str(c.sandbox)}
+    if c.unit.get("core_impl"):
+        tokens["{core_abs}"] = str(c.sb(c.unit["core_impl"]))
+    if c.unit.get("so_impl"):
+        tokens["{so_abs}"] = str(c.sb(c.unit["so_impl"]))
+    for i, rel in enumerate(c.unit.get("impl_files") or c.unit["whitelist"]):
+        tokens[f"{{impl_abs_{i}}}"] = str(c.sb(rel))
+    for token, value in tokens.items():
         prompt = prompt.replace(token, value)
+
+    # 作業場所を必ず伝える。相対パスだけだと本体を編集しうる（実測で発生した）。
+    prompt = (f"作業対象は {c.sandbox} の中だけです。この外にあるファイルは"
+              f"絶対に読み書きしないでください。\n\n" + prompt)
     if feedback:
         prompt += "\n\n前回の失敗:\n" + feedback
 
