@@ -832,34 +832,50 @@ def selftest(c):
     repo_h, sb_h, ok = heads_match(c)
     check("サンドボックスがリポジトリに追従している", ok, f"{sb_h[:8]} / {repo_h[:8]}")
 
-    print("[A] ベースライン（自分でスタブに戻して赤を確認する）")
-    # 「今スタブである」ことを前提にしてはいけない。単位が一度でも成功すると
-    # 本体に実装が入り、この検査は空振りして常に緑になる（実測で発覚）。
-    # 自分でスタブを書き、赤が出ることを確かめてから戻す。
-    impls = c.unit.get("impl_files") or [c.unit.get("core_impl")] or c.unit["whitelist"]
-    stubbed = []
-    for rel in impls:
-        if not rel:
-            continue
-        p = c.sb(rel)
-        if p.exists():
+    impls = [r for r in (c.unit.get("impl_files") or [c.unit.get("core_impl")]
+                         or c.unit["whitelist"]) if r]
+    existing = [r for r in impls if c.sb(r).exists()]
+
+    if not existing:
+        # 新規単位。実装ファイルがまだ無い（実装役がこれから作る）。
+        # ベースラインは本質的に赤であり、戻すべき緑が存在しない。
+        # ここで確かめられるのは「オラクルが置かれていて、かつ赤であること」まで。
+        print("[A] ベースライン（新規単位。実装はまだ無い）")
+
+        missing_tests = []
+        for t in c.unit["acceptance"]["required_tests"]:
+            found = list(c.sandbox.rglob(f"*{t}*.cs"))
+            if not found:
+                missing_tests.append(t)
+        check("受入テストがサンドボックスに置かれている",
+              not missing_tests,
+              "見つからない: " + ", ".join(missing_tests) if missing_tests else "")
+
+        fast, err = run_fast_tests(c, "self_fast")
+        if err:
+            check("実装が無いので赤", True, "ビルドが失敗（実装が無いので当然）")
+        else:
+            red = len(real_failures(fast, c.ctrl_fail, "Failed"))
+            check("実装が無いので赤", red > 0, f"{red} 件 Failed")
+    else:
+        # 既存の実装がある単位。自分でスタブを書き、赤が出ることを確かめてから戻す。
+        # 「今スタブである」ことを前提にしてはいけない。単位が一度でも成功すると
+        # 本体に実装が入り、この検査は空振りして常に緑になる（実測で発覚）。
+        print("[A] ベースライン（自分でスタブに戻して赤を確認する）")
+        stubbed = []
+        for rel in existing:
+            p = c.sb(rel)
             stubbed.append((p, p.read_text(encoding="utf-8")))
             p.write_text(STUB_MARKER, encoding="utf-8")
 
-    fast, err = run_fast_tests(c, "self_fast")
-    if err:
-        # スタブはコンパイルを壊すので、ビルド失敗も「赤が出た」に含める
-        check("スタブで赤が出る", True, "ビルドが失敗（想定どおり）")
-        for p, orig in stubbed:
-            p.write_text(orig, encoding="utf-8")
-        sandbox_reset(c)
-        fast, err = run_fast_tests(c, "self_fast_restored")
+        fast, err = run_fast_tests(c, "self_fast")
         if err:
-            check("復元後の高速検査", False, err)
-            return 2
-    else:
-        check("スタブで赤が出る", len(real_failures(fast, c.ctrl_fail, "Failed")) > 0,
-              f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
+            # スタブはコンパイルを壊すので、ビルド失敗も「赤が出た」に含める
+            check("スタブで赤が出る", True, "ビルドが失敗（想定どおり）")
+        else:
+            red = len(real_failures(fast, c.ctrl_fail, "Failed"))
+            check("スタブで赤が出る", red > 0, f"{red} 件 Failed")
+
         for p, orig in stubbed:
             p.write_text(orig, encoding="utf-8")
         sandbox_reset(c)
@@ -868,13 +884,13 @@ def selftest(c):
             check("復元後の高速検査", False, err)
             return 2
 
-    if not c.test_driven:
-        d_tag = c.g["disclosed_tag"]
-        want_d = golden_count(c, c.g["disclosed_rel"])
-        hit = len(names_with(fast, d_tag + "_"))
-        check("開示ゴールデンが実行されている", hit >= want_d, f"{hit}/{want_d}")
-    check("復元後は緑に戻る", len(real_failures(fast, c.ctrl_fail, "Failed")) == 0,
-          f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
+        if not c.test_driven:
+            d_tag = c.g["disclosed_tag"]
+            want_d = golden_count(c, c.g["disclosed_rel"])
+            hit = len(names_with(fast, d_tag + "_"))
+            check("開示ゴールデンが実行されている", hit >= want_d, f"{hit}/{want_d}")
+        check("復元後は緑に戻る", len(real_failures(fast, c.ctrl_fail, "Failed")) == 0,
+              f"{len(real_failures(fast, c.ctrl_fail, 'Failed'))} 件 Failed")
 
     print("[B] ゲートの発火確認（わざと違反させます）")
     # 同期のずれを検出できるか。sandbox_reset を呼ばずに直接比較する
