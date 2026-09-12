@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -137,6 +138,47 @@ def sandbox_reset(c):
         sys.exit("ABORT: ホールドアウトの残骸を消せませんでした")
     if not (c.sb(c.g["disclosed_rel"])).exists():
         sys.exit(f"ABORT: サンドボックスに開示ゴールデンがありません: {c.g['disclosed_rel']}")
+
+
+def wait_for_ci(c):
+    """push した commit の run を名指しで待つ。
+
+    `gh run watch` を run ID 無しで呼ぶと直近の run を拾う。push 直後は
+    まだ run が生成されていないことがあり、その瞬間には前回の差し戻し run
+    （赤）を見てしまう。標準入力を塞いでいるので対話選択にも応じられない。
+    実測: 正しい実装が CI で緑だったのに 3 回とも赤と誤判定し、差し戻した。
+
+    したがって SHA で run を特定してから watch する。
+    """
+    _, out, _ = run(["git", "rev-parse", "HEAD"], c.repo, c.ttl["git"], "head")
+    sha = out.strip()
+    if not sha:
+        return 2, "HEAD を取得できません"
+
+    run_id = None
+    for _ in range(30):  # run が現れるまで待つ
+        _, listed, _ = run(["gh", "run", "list", "--limit", "20",
+                            "--json", "databaseId,headSha"],
+                           c.repo, c.ttl["git"], "gh run list")
+        try:
+            for r in json.loads(listed or "[]"):
+                if r.get("headSha") == sha:
+                    run_id = str(r["databaseId"])
+                    break
+        except (ValueError, KeyError):
+            pass
+        if run_id:
+            break
+        time.sleep(5)
+
+    if not run_id:
+        return 2, f"CI の run が見つかりません (sha={sha[:8]})"
+
+    rc, _, err = run(["gh", "run", "watch", run_id, "--exit-status"],
+                     c.repo, c.ttl["gh"], "gh run watch")
+    if rc != 0:
+        return rc, f"CI が赤 (run={run_id}): {err[:200]}"
+    return 0, f"CI 緑 (run={run_id})"
 
 
 def heads_match(c):
@@ -521,14 +563,15 @@ def attempt(c, feedback):
         return "ABORT", f"push できません: {(err or out)[:300]}"
 
     print("[7] CI 完了検知")
-    rc, out, err = run(["gh", "run", "watch", "--exit-status"],
-                       c.repo, c.ttl["gh"], "gh run watch")
+    rc, ci_msg = wait_for_ci(c)
     if rc != 0:
+        print(f"    {ci_msg}")
         print("    CI が赤。自動で差し戻します。")
         run(["git", "revert", "--no-edit", "HEAD"], c.repo, c.ttl["git"], "revert")
         run(["git", "push"], c.repo, c.ttl["git"], "push revert")
         return "RETRY", "CI が赤でした（差し戻し済み）"
 
+    print(f"    {ci_msg}")
     return "SUCCESS", ""
 
 
