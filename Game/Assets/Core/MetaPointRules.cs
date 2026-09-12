@@ -14,20 +14,56 @@ namespace Game.Features.MetaProgression
     /// </summary>
     public class MetaPointRules
     {
+        private readonly int _turnBonusPerTurn;
+        private readonly int _skillBonusMultiplier;
+        private readonly int _bossDefeatedBonus;
+        private readonly int _gameClearBonus;
+
         public MetaPointRules(
             int turnBonusPerTurn, int skillBonusMultiplier,
             int bossDefeatedBonus, int gameClearBonus)
-            => throw new NotImplementedException();
+        {
+            _turnBonusPerTurn = turnBonusPerTurn;
+            _skillBonusMultiplier = skillBonusMultiplier;
+            _bossDefeatedBonus = bossDefeatedBonus;
+            _gameClearBonus = gameClearBonus;
+        }
 
-        public int TurnBonusPerTurn     => throw new NotImplementedException();
-        public int SkillBonusMultiplier => throw new NotImplementedException();
-        public int BossDefeatedBonus    => throw new NotImplementedException();
-        public int GameClearBonus       => throw new NotImplementedException();
+        public int TurnBonusPerTurn     => _turnBonusPerTurn;
+        public int SkillBonusMultiplier => _skillBonusMultiplier;
+        public int BossDefeatedBonus    => _bossDefeatedBonus;
+        public int GameClearBonus       => _gameClearBonus;
 
         public int CalculateEarnedPoints(GameState finalState, bool isGameClear, int bossDefeatedCount)
-            => throw new NotImplementedException();
+        {
+            if (finalState == null)
+            {
+                return 0;
+            }
+
+            int turnBonus = Math.Max(0, finalState.CurrentTurn) * _turnBonusPerTurn;
+            int skillBonus = Math.Max(0, finalState.Skill) * _skillBonusMultiplier;
+            int bossBonus = Math.Max(0, bossDefeatedCount) * _bossDefeatedBonus;
+            int clearBonus = isGameClear ? _gameClearBonus : 0;
+
+            return Math.Max(0, turnBonus + skillBonus + bossBonus + clearBonus);
+        }
 
         public MetaProfileState ApplyRunResult(MetaProfileState currentProfile, int earnedPoints)
-            => throw new NotImplementedException();
+        {
+            if (currentProfile == null)
+            {
+                return currentProfile;
+            }
+
+            int safeEarnedPoints = Math.Max(0, earnedPoints);
+
+            return currentProfile with
+            {
+                AvailableMetaPoints = currentProfile.AvailableMetaPoints + safeEarnedPoints,
+                TotalEarnedMetaPoints = currentProfile.TotalEarnedMetaPoints + safeEarnedPoints,
+                TotalRunsCompleted = currentProfile.TotalRunsCompleted + 1
+            };
+        }
     }
 }
