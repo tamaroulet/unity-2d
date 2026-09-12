@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+
+    <!-- Unity 6 は C# 9。ここを固定しないと dotnet test は緑なのに Unity だけ落ちる。
+         Unity の 10 分かかるバッチモードに行く前に、秒で検出させる。
+         C# 10 以降の機能である暗黙 using は使えないので明示 using にする。 -->
+    <LangVersion>9.0</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <!-- 出所は Game/Assets/Core の 1 箇所だけ。コピーを持たないので、
+       MS1 が必要としていた copied_hashes.json とハッシュ照合の門が要らなくなる。
+
+       Core/Events/ は UnityEngine に依存するため含めない。含めればビルドが落ちる。
+       つまり「Core 直下と Data が UnityEngine 非依存であること」が
+       このビルドの成否そのもので機械的に保証される。 -->
+  <ItemGroup>
+    <Compile Include="..\..\Game\Assets\Core\*.cs" />
+    <Compile Include="..\..\Game\Assets\Core\Data\*.cs" />
+  </ItemGroup>
+
+  <!-- Link で出力直下に平らに置く。テストは TestDirectory から golden_*.json を探す。 -->
+  <ItemGroup>
+    <None Include="..\golden\golden_*.json"
+          Link="%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit.Analyzers" Version="3.9.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.5.0" />
+  </ItemGroup>
+
+</Project>

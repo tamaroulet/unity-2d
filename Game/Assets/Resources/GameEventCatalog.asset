@@ -1,0 +1,18 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8bcfeeaf6d9344779734f55f5f0942ef, type: 3}
+  m_Name: GameEventCatalog
+  m_EditorClassIdentifier: Game.Features.Event::Game.Features.Event.GameEventCatalogSO
+  _events:
+  - {fileID: 11400000, guid: dabf53696171e8c4db76289e22c2217d, type: 2}
+  _paramMin: 0
+  _paramMax: 100

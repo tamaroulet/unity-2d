@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a72d97d0e4d04189ada9ca32ceb0cba4, type: 3}
+  m_Name: Boss_Act1_01
+  m_EditorClassIdentifier: Game.Features.Boss::Game.Features.Boss.BossSO
+  _bossId: 1
+  _bossName: Boss_Act1_01
+  _maxHp: 80
+  _attackPower: 15
+  _mentalPressurePower: 10
+  _guardShieldAmount: 5
+  _specialAttackMultiplier: 1.5
+  _actionPattern: 00000000010000000200000003000000

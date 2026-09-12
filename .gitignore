@@ -1,0 +1,15 @@
+# Unity プロジェクト側の除外は Game/.gitignore が持つ
+# （github/gitignore の Unity テンプレート）。ここはリポジトリ直下の分だけ。
+
+# .NET
+bin/
+obj/
+*.user
+
+# 出力・ログ
+_out/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
