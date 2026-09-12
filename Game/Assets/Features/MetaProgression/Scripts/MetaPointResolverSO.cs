@@ -53,8 +53,17 @@ namespace Game.Features.MetaProgression
         /// </summary>
         public int CalculateEarnedPoints(GameState finalState, bool isGameClear, int bossDefeatedCount)
         {
-            return new MetaPointRules(_turnBonusPerTurn, _skillBonusMultiplier, _bossDefeatedBonus, _gameClearBonus)
-                .CalculateEarnedPoints(finalState, isGameClear, bossDefeatedCount);
+            if (finalState == null)
+            {
+                return 0;
+            }
+
+            int turnBonus = Mathf.Max(0, finalState.CurrentTurn) * _turnBonusPerTurn;
+            int skillBonus = Mathf.Max(0, finalState.Skill) * _skillBonusMultiplier;
+            int bossBonus = Mathf.Max(0, bossDefeatedCount) * _bossDefeatedBonus;
+            int clearBonus = isGameClear ? _gameClearBonus : 0;
+
+            return Mathf.Max(0, turnBonus + skillBonus + bossBonus + clearBonus);
         }
 
         /// <summary>
@@ -64,8 +73,19 @@ namespace Game.Features.MetaProgression
         /// </summary>
         public MetaProfileState ApplyRunResult(MetaProfileState currentProfile, int earnedPoints)
         {
-            return new MetaPointRules(_turnBonusPerTurn, _skillBonusMultiplier, _bossDefeatedBonus, _gameClearBonus)
-                .ApplyRunResult(currentProfile, earnedPoints);
+            if (currentProfile == null)
+            {
+                return currentProfile;
+            }
+
+            int safeEarnedPoints = Mathf.Max(0, earnedPoints);
+
+            return currentProfile with
+            {
+                AvailableMetaPoints = currentProfile.AvailableMetaPoints + safeEarnedPoints,
+                TotalEarnedMetaPoints = currentProfile.TotalEarnedMetaPoints + safeEarnedPoints,
+                TotalRunsCompleted = currentProfile.TotalRunsCompleted + 1
+            };
         }
 
         /// <summary>
