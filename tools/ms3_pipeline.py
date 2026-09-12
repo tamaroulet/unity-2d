@@ -25,15 +25,22 @@ from pathlib import Path
 
 TRX_NS = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
 
+# Windows でサブプロセスがコンソールウィンドウを開かないようにする。
+# 非 Windows では属性が無いので 0 になり、無害に無視される。
+# 効くのは git / dotnet / gh / agy（コンソールアプリ）。Unity.exe は GUI
+# サブシステムなので効かないが、-batchmode -nographics で元々出ない。
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 # ============================================================ 基本
 
 def run(args, cwd, ttl, label, env=None):
-    """shell=False。stdin は塞ぐ（制約 2）。"""
+    """shell=False。stdin は塞ぐ（制約 2）。ウィンドウも出さない。"""
     try:
         r = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True,
                            timeout=ttl, encoding="utf-8", errors="replace",
-                           stdin=subprocess.DEVNULL, env=env)
+                           stdin=subprocess.DEVNULL, env=env,
+                           creationflags=_NO_WINDOW)
         return r.returncode, r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired:
         return 124, "", f"TTL超過 ({ttl}s): {label}"
@@ -128,7 +135,16 @@ def purge_holdout(c):
 # ============================================================ 実装AI
 
 def call_implementer(c, feedback=""):
+    # 相対パスで渡すと、実装AIが本体リポジトリを編集しうる（実測で発生した）。
+    # サンドボックスの絶対パスに展開して曖昧さを消す。ただしこれは
+    # 「間違えにくくする」だけで、脱走を防ぐ機構ではない。
+    # 実際の防波堤は gate_repo_untouched（検出して ABORT）。
     prompt = c.unit["prompt"]
+    for token, rel in (("{core_abs}", c.unit["core_impl"]),
+                       ("{so_abs}", c.unit["so_impl"]),
+                       ("{sandbox_abs}", None)):
+        value = str(c.sandbox) if rel is None else str(c.sb(rel))
+        prompt = prompt.replace(token, value)
     if feedback:
         prompt += "\n\n前回の失敗:\n" + feedback
 
@@ -143,6 +159,18 @@ def call_implementer(c, feedback=""):
 
 
 # ============================================================ 静的門
+
+def gate_repo_untouched(c):
+    """本体リポジトリが触られていないことを確認する。
+
+    サンドボックス（git worktree）は機構ではなく慣習である。同一ユーザー・
+    同一権限で動く実装AIは本体を書き換えられるし、実際に書き換えた。
+    防げないので、破れたことを検出する。検出したらリトライせず ABORT する
+    （同じことを 3 回繰り返すだけなので）。
+    """
+    _, out, _ = run(["git", "status", "--porcelain"], c.repo, c.ttl["git"], "repo status")
+    return [l[3:].strip() for l in out.splitlines() if l.strip()]
+
 
 def gate_whitelist(c):
     _, out, _ = run(["git", "status", "--porcelain"], c.sandbox, c.ttl["git"], "status")
@@ -253,13 +281,18 @@ def run_unity_tests(c, tag):
 
     import os
     env = dict(os.environ)
-    env["MS3_GOLDEN_DIR"] = str(c.stage)
+    # 同居する全ランナーが同じステージング先を見る。片方しか設定しないと
+    # 他方が「ファイルが無い」で落ちる。
+    for var in c.cfg["golden_dir_env_vars"]:
+        env[var] = str(c.stage)
 
+    # -testFilter は付けない。名前空間を指定すると NUnit が [Explicit] を
+    # 「明示的な選択」とみなして実行してしまい、Skip されるはずの 20 件が
+    # 走って落ちる（実測で発生した）。無指定なら正しく Skip される。
     unity = c.cfg["unity_exe"]
     rc, _, err = run([unity, "-batchmode", "-nographics",
                       "-projectPath", str(c.unity_proj),
                       "-runTests", "-testPlatform", "EditMode",
-                      "-testFilter", c.unit["unity_test_filter"],
                       "-testResults", str(xml), "-logFile", str(log)],
                      c.sandbox, c.ttl["unity"], f"unity ({tag})", env=env)
     if not xml.exists():
@@ -298,14 +331,29 @@ def golden_count(c, rel_or_abs):
 
 
 def stage_golden(c, with_holdout):
-    """ゴールデンを Unity テストが読む場所へ置く。件数は JSON から導く。"""
+    """開示ゴールデンを「全部」置く。
+
+    この単位のゴールデンだけを置くと、同じ Unity スイートに同居する他の
+    ゴールデンランナー（MS2 の GoldenMasterEquivalenceTests など）が
+    「ファイルが無い」で落ち、実装が正しくても REJECT になる（実測で発生した）。
+    ステージング先は 1 つで、そこを全ランナーが見る。
+    """
     c.stage.mkdir(parents=True, exist_ok=True)
     for p in c.stage.glob("golden_*.json"):
         p.unlink()
-    shutil.copyfile(c.sb(c.g["disclosed_rel"]), c.stage / Path(c.g["disclosed_rel"]).name)
+
+    src_dir = c.sb("tests/golden")
+    staged = []
+    for p in sorted(src_dir.glob("golden_*.json")):
+        shutil.copyfile(p, c.stage / p.name)
+        staged.append(p.name)
+    if not staged:
+        sys.exit(f"ABORT: 開示ゴールデンが 1 本もありません: {src_dir}")
+
     if with_holdout:
         shutil.copyfile(c.g["holdout_src"], c.stage / Path(c.g["holdout_rel"]).name)
         shutil.copyfile(c.g["holdout_src"], c.sb(c.g["holdout_rel"]))
+    return staged
 
 
 def check_acceptance(c, fast, unity, expect_holdout):
@@ -364,6 +412,11 @@ def attempt(c, feedback):
     ok, msg = call_implementer(c, feedback)
     if not ok:
         return "RETRY", msg
+
+    escaped = gate_repo_untouched(c)
+    if escaped:
+        return "ABORT", ("実装AIがサンドボックス外（本体リポジトリ）を書き換えました: "
+                         + ", ".join(escaped[:5]))
 
     print("[2] 静的機械判定")
     bad = gate_whitelist(c)

@@ -4,7 +4,9 @@
   "id": "metapoint",
   "title": "MetaPointRules（純粋版）の実装と GameRulesSO 方式の委譲",
 
-  "prompt": "Game/Assets/Core/MetaPointRules.cs を実装してください。現在は全メンバーが NotImplementedException を投げるスタブです。コンストラクタで受け取った4つの係数を保持し、4つのプロパティで返してください。CalculateEarnedPoints と ApplyRunResult は、同じリポジトリの Game/Assets/Features/MetaProgression/Scripts/MetaPointResolverSO.cs にある同名メソッドとまったく同じ計算をしてください。ただしこのファイルは UnityEngine を参照できないアセンブリにあるため、UnityEngine.Mathf.Max は使えません。System.Math.Max に置き換えてください（int 同士なら挙動は同一です）。あわせて MetaPointResolverSO.cs の CalculateEarnedPoints と ApplyRunResult の中身を、MetaPointRules を new して委譲する形に差し替えてください。[SerializeField] の4フィールドと4つのプロパティ（TurnBonusPerTurn 等）は1文字も変更しないでください。クラス名・引数順・メソッド名も変更禁止です。この2ファイル以外を作成・変更しないでください。テストファイルと golden_*.json には触らないでください。[Ignore] と [Explicit] は使用禁止です。",
+  "_prompt_note": "{core_abs} {so_abs} {sandbox_abs} はパイプラインがサンドボックスの絶対パスに展開する。相対パスで渡すと実装AIが本体リポジトリを編集しうる（実測で発生した）",
+
+  "prompt": "作業対象は {sandbox_abs} の中だけです。この外にあるファイルは絶対に読み書きしないでください。\n\n{core_abs} を実装してください。現在は全メンバーが NotImplementedException を投げるスタブです。コンストラクタで受け取った4つの係数を保持し、4つのプロパティで返してください。CalculateEarnedPoints と ApplyRunResult は、{so_abs} にある同名メソッドとまったく同じ計算をしてください。ただし {core_abs} は UnityEngine を参照できないアセンブリにあるため、UnityEngine.Mathf.Max は使えません。System.Math.Max に置き換えてください（int 同士なら挙動は同一です）。あわせて {so_abs} の CalculateEarnedPoints と ApplyRunResult の中身を、MetaPointRules を new して委譲する形に差し替えてください。[SerializeField] の4フィールドと4つのプロパティ（TurnBonusPerTurn 等）は1文字も変更しないでください。クラス名・引数順・メソッド名も変更禁止です。この2ファイル以外を作成・変更しないでください。テストファイルと golden_*.json には触らないでください。[Ignore] と [Explicit] は使用禁止です。",
 
   "whitelist": [
     "Game/Assets/Core/MetaPointRules.cs",
