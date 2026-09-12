@@ -31,6 +31,15 @@ TRX_NS = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
 # サブシステムなので効かないが、-batchmode -nographics で元々出ない。
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# creationflags だけでは足りない。agy のように内部でさらに子を起こす
+# プロセスは conhost.exe を一瞬立ち上げてフォーカスを奪う（実測）。
+# STARTUPINFO で SW_HIDE を渡し、最初のウィンドウ表示自体を抑える。
+_STARTUPINFO = None
+if sys.platform == "win32":
+    _STARTUPINFO = subprocess.STARTUPINFO()
+    _STARTUPINFO.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    _STARTUPINFO.wShowWindow = 0  # SW_HIDE
+
 
 # ============================================================ 基本
 
@@ -40,7 +49,7 @@ def run(args, cwd, ttl, label, env=None):
         r = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True,
                            timeout=ttl, encoding="utf-8", errors="replace",
                            stdin=subprocess.DEVNULL, env=env,
-                           creationflags=_NO_WINDOW)
+                           creationflags=_NO_WINDOW, startupinfo=_STARTUPINFO)
         return r.returncode, r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired:
         return 124, "", f"TTL超過 ({ttl}s): {label}"

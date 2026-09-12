@@ -23,6 +23,14 @@ namespace Game.Tests.EditMode
     /// </summary>
     public class GoldenMasterEquivalenceTests
     {
+        /// <summary>
+        /// このランナーが受け付けるゴールデンの出所。JSON の source と一致しないものは読まない。
+        /// 無差別に golden_*.json を読むと、同じディレクトリに置かれた他機能の
+        /// ゴールデン（MS3 の MetaPointResolverSO 由来など）まで解釈しようとして壊れる。
+        /// Pure C# 側の 3 本には入れたのに、この Unity 側だけ入れ忘れていた（実測で発覚）。
+        /// </summary>
+        private const string ExpectedSource = "GameRulesSO.CreateInitialState";
+
         // 必ず通る対照群。落ちたらテスト実行環境そのものの故障。
         [Test]
         public void AlwaysPasses_ControlGroup()
@@ -43,8 +51,13 @@ namespace Game.Tests.EditMode
             Assert.Greater(files.Length, 0, "golden_*.json が1本もありません: " + dir);
 
             int total = 0;
-            foreach (string f in files) { total += ParseFile(f).Count; }
-            Assert.Greater(total, 0, "ケースが1件も読めませんでした");
+            foreach (string f in files)
+            {
+                if (!IsOurs(f)) { continue; }
+                total += ParseFile(f).Count;
+            }
+            Assert.Greater(total, 0,
+                "source = \"" + ExpectedSource + "\" のゴールデンを 1 件も読めていません");
         }
 
         public sealed class Case
@@ -65,6 +78,14 @@ namespace Game.Tests.EditMode
             return Environment.GetEnvironmentVariable("MS2_GOLDEN_DIR");
         }
 
+        /// <summary>この JSON がこのランナーの担当かを source で判定する。</summary>
+        private static bool IsOurs(string path)
+        {
+            string head = File.ReadAllText(path);
+            Match m = Regex.Match(head, "\"source\"\\s*:\\s*\"([^\"]*)\"");
+            return m.Success && m.Groups[1].Value == ExpectedSource;
+        }
+
         public static IEnumerable<TestCaseData> AllCases()
         {
             string dir = GoldenDir();
@@ -75,6 +96,7 @@ namespace Game.Tests.EditMode
 
             foreach (string path in Directory.GetFiles(dir, "golden_*.json"))
             {
+                if (!IsOurs(path)) { continue; }
                 foreach (Case c in ParseFile(path))
                 {
                     yield return new TestCaseData(c).SetName(c.Tag + "_" + c.Id);
