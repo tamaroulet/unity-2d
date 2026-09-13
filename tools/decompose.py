@@ -113,6 +113,17 @@ def call_claude(prompt):
     return out
 
 
+def reject(msg):
+    """分解役の出力が使えない。環境は正常なので rc=1（次の Issue へ進んでよい）。
+
+    文字列で sys.exit すると __main__ で rc=2（環境異常）に正規化される。
+    gh・CLI の不在や claude の異常終了はそちらでよいが、LLM の出力不良まで
+    環境異常にするとスケジューラが止まってしまうので、ここだけ 1 で出る。
+    """
+    print(msg, file=sys.stderr)
+    sys.exit(1)
+
+
 def extract_json(text):
     """応答から JSON を取り出す。```json ブロックにも素の JSON にも対応する。"""
     m = re.search(r"```(?:json)?\s*\n(.*?)\n```", text, re.S)
@@ -120,11 +131,11 @@ def extract_json(text):
     start = blob.find("{")
     end = blob.rfind("}")
     if start < 0 or end <= start:
-        sys.exit("応答から JSON を取り出せません:\n" + text[:600])
+        reject("応答から JSON を取り出せません:\n" + text[:600])
     try:
         return json.loads(blob[start:end + 1])
     except json.JSONDecodeError as e:
-        sys.exit(f"JSON として読めません: {e}\n" + blob[start:end + 1][:600])
+        reject(f"JSON として読めません: {e}\n" + blob[start:end + 1][:600])
 
 
 # ============================================================ 検査
@@ -246,4 +257,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # 終了コード: 0=書き出した / 1=分解役の出力が要件を満たさない / 2=環境異常
+    # sys.exit("...")（gh・CLI・claude の失敗）と未捕捉例外は 2 になる。
+    import exitcode
+    sys.exit(exitcode.normalized(main))

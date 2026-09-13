@@ -1102,4 +1102,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # sys.exit("ABORT: ...") と未捕捉例外を rc=2 にそろえる（制約 3）。
+    # そのままだと rc=1 になり、スケジューラが REJECT と取り違える。
+    import exitcode
+    sys.exit(exitcode.normalized(main))
