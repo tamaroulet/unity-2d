@@ -15,13 +15,21 @@
 
 $ErrorActionPreference = "Stop"
 
-$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ConfigPath = Join-Path $ScriptDir "ms3.config.json"
-if (-not (Test-Path $ConfigPath)) { throw "設定が見つかりません: $ConfigPath" }
-$CFG = Get-Content $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+# 設定は game-harness に移設した（2026-09-13）。ここに写しを置くと片方だけ直して食い違う。
+#   projects\unity-2d\project.json   リポジトリの位置
+#   projects\unity-2d\pipeline.json  採取・パイプラインの設定（旧 tools\ms3.config.json）
+$HarnessDir = if ($env:GAME_HARNESS_DIR) { $env:GAME_HARNESS_DIR } else { "C:\src\game-harness" }
+$ProjectDir = Join-Path $HarnessDir "projects\unity-2d"
+$ConfigPath  = Join-Path $ProjectDir "pipeline.json"
+$ProjectPath = Join-Path $ProjectDir "project.json"
+foreach ($p in @($ConfigPath, $ProjectPath)) {
+    if (-not (Test-Path $p)) { throw "設定が見つかりません: $p" }
+}
+$CFG     = Get-Content $ConfigPath  -Raw -Encoding UTF8 | ConvertFrom-Json
+$PROJECT = Get-Content $ProjectPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
-$Repo     = $CFG.paths.repo
-$Proj     = Join-Path $Repo $CFG.paths.unity_project_subdir
+$Repo     = $PROJECT.repo_dir
+$Proj     = Join-Path $Repo $PROJECT.unity_project_subdir
 $Staging  = $CFG.paths.out_dir
 $Oracles  = $CFG.paths.oracles_dir
 $GC       = $CFG.golden_capture
