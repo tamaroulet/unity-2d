@@ -1,0 +1,57 @@
+{
+  "_comment": "ms4_scheduler.py の唯一の設定。テストの置き場所や監査レポートの出力先は decompose / audit の設定から読み、ここに再掲しない。",
+
+  "repo_slug": "tamaroulet/unity-2d",
+  "repo_dir": "C:\\src\\unity-2d",
+  "base_branch": "main",
+  "branch_prefix": "ms4/issue-",
+
+  "_out_note": "リポジトリの外。ここに書くものは作業ツリーを汚さない（require_repo_clean に拾われない）",
+  "out_dir": "C:\\src\\.local\\out\\ms4",
+
+  "labels": {
+    "ready":   { "name": "ready",       "color": "FEF2C0", "description": "dispatch から投入された未着手の要求" },
+    "running": { "name": "ms4:running", "color": "1D76DB", "description": "スケジューラが処理中。ABORT で止まった場合もこのまま残る" },
+    "failed":  { "name": "ms4:failed",  "color": "D93F0B", "description": "スケジューラが不合格にした。原因を直し、ブランチを消して ready を付け直す" }
+  },
+
+  "_clis_note": "前提検査で PATH にあることを確かめる。無ければ全 Issue が同じ理由で落ちるので、着手前に止める",
+  "required_clis": ["git", "gh", "claude", "agy"],
+
+  "_commands_note": "{python} は実行中の Python。cwd は repo_dir。テストではここをスタブに差し替える",
+  "commands": {
+    "decompose": ["{python}", "tools/decompose.py", "--issue", "{number}"],
+    "audit":     ["{python}", "tools/audit.py", "--file", "{file}"],
+    "pipeline":  ["{python}", "tools/ms3_pipeline.py", "--unit", "{unit}"]
+  },
+  "unit_path_template": "tools/units/issue_{number}.json",
+  "decompose_config": "tools/decompose.config.json",
+  "audit_config": "tools/audit.config.json",
+
+  "audit": {
+    "_required_note": "false: キーが無ければスキップ、失敗しても記録のみ。監査結果は合否に使わない（人間の決定 2026-09-13）",
+    "required": false,
+    "key_env": "OPENAI_API_KEY"
+  },
+
+  "_ttl_note": "pipeline は自己検査の Unity 実行と 3 試行（各 Unity 最大 1800s + CI 待ち）を含む。途中で殺すと Unity が孤児になるので長めに取る",
+  "ttl_seconds": {
+    "git": 180,
+    "gh": 90,
+    "decompose": 1200,
+    "audit": 900,
+    "pipeline": 18000
+  },
+
+  "_ci_note": "Actions のキュー待ちで run がまだ生成されていない間は ABORT しない。見つけるまでと、完了するまでを分けて待つ",
+  "ci_find_seconds": 600,
+  "ci_watch_seconds": 3600,
+  "ci_poll_interval_seconds": 15,
+
+  "_retry_note": "gh と git のネットワーク操作だけ。書き込みは再試行の前に状態を読み直し、反映済みなら重ねない",
+  "net_retries": 2,
+  "net_retry_interval_seconds": 5,
+
+  "comment_log_tail_chars": 1500,
+  "max_issues_per_run": 5
+}
