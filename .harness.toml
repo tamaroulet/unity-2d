@@ -1,0 +1,71 @@
+# harness の契約（schema 1）。仕様は tamaroulet/game-harness の docs/design/contract.md。
+# harness は main の先頭からだけ読む。変更は人間が承認した PR からだけ入れる。
+schema = 1
+
+[engine]
+kind = "unity"
+
+[paths]
+impl_roots = ["Game/Assets/Core"]
+test_dir = "tests/Core.Tests"
+units_dir = "tools/units"
+audit_reports_dir = "reports/audits"
+permitted = [
+  "Game/Assets/Core/**/*.cs",
+  "Game/Assets/Features/**/*.cs",
+]
+prohibited = [
+  "Game/Assets/Tests/**",
+  "Game/ProjectSettings/**",
+  "Game/Packages/**",
+]
+
+[engine.unity]
+project_subdir = "Game"
+editor_version = "6000.3.23f1"
+test_platform = "EditMode"
+skipped_baseline = 20
+golden_dir_env_vars = ["MS2_GOLDEN_DIR", "MS3_GOLDEN_DIR"]
+
+[tests.fast]
+runner = "dotnet"
+project = "tests/Core.Tests/Core.Tests.csproj"
+
+[tests.engine]
+runner = "unity-testrunner"
+ttl_seconds = 1800
+
+[oracle]
+control_must_pass = "AlwaysPasses_ControlGroup"
+control_must_fail = "control_must_fail"
+
+[limits]
+max_impl_lines = 250
+
+[static]
+selftest_forbidden_probe = "UnityEngine.Debug.Log(0);"
+
+[[static.forbidden]]
+pattern = '\bUnityEngine\b'
+label = "UnityEngine への依存"
+
+[[static.forbidden]]
+pattern = '\bMonoBehaviour\b'
+label = "MonoBehaviour への依存"
+
+[[static.forbidden]]
+pattern = '\bTime\.(deltaTime|time|fixedDeltaTime)\b'
+label = "グローバル時間への依存"
+
+[[static.forbidden]]
+pattern = '\bUnityEngine\.Random\b|\bnew Random\s*\(\s*\)'
+label = "非決定な乱数"
+
+[merge]
+required_checks = ["test", "approval"]
+
+# プレイ確認（H2）。scene は起動シーンで、自動的に禁止に加わる。
+# build_method は Game/Assets/Editor/PlaytestBuild.cs（-playtestOutput に exe のパスを受け取る）
+[playtest]
+scene = "Game/Assets/Scenes/MainGame.unity"
+build_method = "Game.EditorScripts.PlaytestBuild.BuildWindows"
