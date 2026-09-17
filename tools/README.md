@@ -26,3 +26,15 @@ python C:\src\game-harness\harness\scheduler.py --project unity-2d --dry-run
 - `units/` — 単位定義。分解役の出力で、実装の根拠としてコミット履歴に残す
 - `accept.ps1` — このリポジトリの Unity 受入
 - `ms3_capture_golden.ps1` — MS3 のゴールデン採取。設定は game-harness の `projects/unity-2d/` から読む
+
+## main の保護（2026-09-17 から）
+
+main にはルールセット `ms4-protect-default-branch` が掛かっている。**所有者を含め、誰も迂回できない。**
+
+- 直接 push・force push・削除はできない。変更はすべて PR から入る
+- マージには必須チェックが 2 つとも success であることが要る
+  - `test` — `.github/workflows/core-tests.yml`（Pure C# の dotnet test）
+  - `approval` — `.github/workflows/approval.yml`。承認者（`.github/ms4-approvers`）が、
+    **今の head のコミットに対して** `ms4:approved` を付けたか。push されると承認は外れる
+- 承認は人間が dispatch から行う（`python tools/dispatch.py --approve unity-2d#<PR>`）
+- approval の一式は game-harness の `harness/templates/game-repo/` から写したもの。ここで直接編集しない
